@@ -73,6 +73,56 @@ func TestConvertRejects(t *testing.T) {
 	}
 }
 
+func TestConvertRejectsInline(t *testing.T) {
+	const head = "id: x\ninfo: {name: x, severity: info}\n"
+	const st = "    matchers:\n      - type: status\n        status: [200]\n"
+	req := func(extra string) string {
+		return head + "http:\n  - path: [\"{{BaseURL}}/x\"]\n" + extra + st
+	}
+	tt := []struct{ name, doc, reason string }{
+		{"dup method", head + "http:\n  - method: POST\n    method: GET\n    path: [\"{{BaseURL}}/x\"]\n" + st, "duplicate yaml key"},
+		{"dup http", head + "http:\n  - method: POST\n    path: [\"{{BaseURL}}/x\"]\n" + st + "http:\n  - path: [\"{{BaseURL}}/y\"]\n" + st, "duplicate yaml key"},
+		{"merge key", head + "http:\n  - path: [\"{{BaseURL}}/x\"]\n    <<: {method: POST}\n" + st, "merge keys"},
+		{"redirects", req("    redirects: true\n"), "redirects not allowed"},
+		{"host-redirects", req("    host-redirects: true\n"), "host-redirects not allowed"},
+		{"max-redirects", req("    max-redirects: 0\n"), "max-redirects not allowed"},
+		{"max-size", req("    max-size: 10\n"), "max-size not allowed"},
+		{"unsafe", req("    unsafe: true\n"), `"unsafe"`},
+		{"pipeline", req("    pipeline: true\n"), `"pipeline"`},
+		{"req-condition", req("    req-condition: true\n"), `"req-condition"`},
+		{"race", req("    race: true\n"), `"race"`},
+		{"attack", req("    attack: pitchfork\n"), `"attack"`},
+		{"variables", "variables: {a: b}\n" + req(""), `field "variables"`},
+		{"flow", "flow: http(1)\n" + req(""), `field "flow"`},
+		{"two paths", head + "http:\n  - path: [\"{{BaseURL}}/a\", \"{{BaseURL}}/b\"]\n" + st, "more than one request path"},
+		{"encoding", head + "http:\n  - path: [\"{{BaseURL}}/a\"]\n    matchers:\n      - type: word\n        words: [a]\n        encoding: hex\n", "encoding"},
+		{"part", head + "http:\n  - path: [\"{{BaseURL}}/a\"]\n    matchers:\n      - type: word\n        part: all\n        words: [a]\n", `part "all"`},
+		{"matcher field", head + "http:\n  - path: [\"{{BaseURL}}/a\"]\n    matchers:\n      - type: word\n        words: [a]\n        match-all: true\n", `matcher field "match-all"`},
+		{"crlf header", req("    headers:\n      Accept: \"a\\r\\nX-Evil: 1\"\n"), "Accept"},
+		{"host header", req("    headers:\n      Host: evil.example\n"), "Host"},
+		{"header alternation", head + "http:\n  - path: [\"{{BaseURL}}/a\"]\n    matchers:\n      - type: regex\n        part: header\n        regex: ['Server: nginx|Server: apache']\n", "alternation"},
+	}
+	for _, tc := range tt {
+		t.Run(tc.name, func(t *testing.T) {
+			s, err := Convert([]byte(tc.doc))
+
+			assert.Nil(t, s)
+			var re *RejectError
+			if assert.True(t, errors.As(err, &re), "%v", err) {
+				assert.Contain(t, tc.reason, re.Reason)
+			}
+		})
+	}
+}
+
+func TestConvertAllowsExplicitFalseRedirects(t *testing.T) {
+	doc := "id: x\ninfo: {name: x, severity: info}\nhttp:\n  - path: [\"{{BaseURL}}/x\"]\n    redirects: false\n    host-redirects: false\n    matchers:\n      - type: status\n        status: [200]\n"
+
+	_, err := Convert([]byte(doc))
+
+	assert.NoError(t, err)
+}
+
 func TestConvertRejectExactReason(t *testing.T) {
 	_, err := convertFile(t, "reject_post.yaml")
 

@@ -47,9 +47,14 @@ var protocols = []string{"headless", "network", "tcp", "dns", "code", "file", "s
 
 // ignoredRequestFields do not change what is sent or matched passively.
 var ignoredRequestFields = map[string]bool{
-	"id": true, "name": true, "stop-at-first-match": true, "redirects": true, "host-redirects": true,
-	"max-redirects": true, "extractors": true, "max-size": true, "cookie-reuse": true,
+	"id": true, "name": true, "stop-at-first-match": true, "extractors": true, "cookie-reuse": true,
 	"disable-path-automerge": true, "skip-variables-check": true,
+}
+
+// matcherFields are the nuclei matcher keys the converter understands.
+var matcherFields = map[string]bool{
+	"type": true, "part": true, "words": true, "regex": true, "status": true, "condition": true,
+	"negative": true, "case-insensitive": true, "name": true,
 }
 
 var (
@@ -187,6 +192,18 @@ func checkNode(n *yaml.Node, depth int, count *int) string {
 	switch {
 	case n.Kind == yaml.AliasNode || n.Anchor != "":
 		return "yaml anchors and aliases not allowed"
+	case n.Kind == yaml.MappingNode:
+		seen := map[string]bool{}
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k := n.Content[i].Value
+			if k == "<<" {
+				return "yaml merge keys not allowed"
+			}
+			if seen[k] {
+				return fmt.Sprintf("duplicate yaml key %q", k)
+			}
+			seen[k] = true
+		}
 	case depth > maxYAMLDepth:
 		return "yaml nested too deeply"
 	case *count > maxYAMLNodes:
@@ -243,6 +260,16 @@ func convertRequest(n *yaml.Node, s *sig.Signature) error {
 	case fields["fuzzing"] != nil:
 		return reject("fuzzing not allowed")
 	}
+	for _, k := range []string{"redirects", "host-redirects"} {
+		if v := fields[k]; v != nil && v.Value != "false" {
+			return reject("%s not allowed (only false)", k)
+		}
+	}
+	for _, k := range []string{"max-redirects", "max-size"} {
+		if fields[k] != nil {
+			return reject("%s not allowed", k)
+		}
+	}
 	method := "GET"
 	if m := fields["method"]; m != nil {
 		method = strings.ToUpper(strings.TrimSpace(m.Value))
@@ -252,7 +279,7 @@ func convertRequest(n *yaml.Node, s *sig.Signature) error {
 	}
 	for _, k := range keys {
 		switch k {
-		case "method", "path", "headers", "matchers", "matchers-condition":
+		case "method", "path", "headers", "matchers", "matchers-condition", "redirects", "host-redirects":
 		default:
 			if !ignoredRequestFields[k] {
 				return reject("request field %q not supported", k)
@@ -308,6 +335,19 @@ func convertRequest(n *yaml.Node, s *sig.Signature) error {
 	}
 	if len(ms) == 0 {
 		return reject("at least one matcher is required")
+	}
+	for i, mn := range fields["matchers"].Content {
+		if mn.Kind != yaml.MappingNode || i >= len(ms) {
+			continue
+		}
+		if t := ms[i].Type; t != "status" && t != "word" && t != "regex" {
+			return reject("matcher type %s not supported", t)
+		}
+		for j := 0; j+1 < len(mn.Content); j += 2 {
+			if k := mn.Content[j].Value; !matcherFields[k] {
+				return reject("matcher field %q not supported", k)
+			}
+		}
 	}
 
 	b := &builder{probe: probe, path: probePath, method: method, headers: headers}
@@ -465,6 +505,9 @@ func (b *builder) single(patterns []string, header, negative bool) (sig.MatcherS
 	presence := false
 	for _, p := range patterns {
 		flags, n, rest, ok := splitHeaderPattern(p)
+		if ok && topLevelAlternation(p) {
+			return sig.MatcherSpec{}, reject("header pattern %q uses top-level | alternation; use separate words", p)
+		}
 		if !ok {
 			return sig.MatcherSpec{}, reject("header pattern %q must start with a literal header name (Name: value)", p)
 		}
@@ -591,4 +634,26 @@ func truncate(s string, n int) string {
 		s = s[:len(s)-1]
 	}
 	return s
+}
+
+// topLevelAlternation reports an unescaped | outside groups and classes.
+func topLevelAlternation(p string) bool {
+	depth, class := 0, false
+	for i := 0; i < len(p); i++ {
+		switch c := p[i]; {
+		case c == '\\':
+			i++
+		case class:
+			class = c != ']'
+		case c == '[':
+			class = true
+		case c == '(':
+			depth++
+		case c == ')':
+			depth--
+		case c == '|' && depth == 0:
+			return true
+		}
+	}
+	return false
 }
