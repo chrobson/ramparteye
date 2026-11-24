@@ -31,6 +31,8 @@ type SettingsStore interface {
 	SaveDojoConfig(ctx context.Context, c store.DojoConfig) error
 }
 
+var _ SettingsStore = (*store.Store)(nil)
+
 // Settings is the DefectDojo connection as edited in the UI.
 type Settings struct {
 	URL         string
