@@ -4,3 +4,5 @@ bin/
 .env
 secrets/
 tmp/
+# install.sh run inside a checkout (holds .env with secrets)
+/ramparteye/
