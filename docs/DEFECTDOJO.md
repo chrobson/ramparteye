@@ -15,8 +15,8 @@ configures a URL and an API token.
      again; leave the field empty to keep the stored token, or tick **Remove the stored token**;
    - **Product type**, **Product** and **Engagement** (defaults `RampartEye`, `RampartEye` and
      `Continuous discovery`). They are created on demand;
-   - **Auto-push after every scan** (on by default) and **Close findings that disappear** (off by
-     default).
+   - **Push automatically after every completed scan** (on by default) and **Close findings in
+     DefectDojo when they disappear (mitigate on reimport)** (off by default).
 3. **Save**, then **Test connection**. The test checks that the URL answers, that the token is
    valid, that the user may import (global, product type or product role) and whether the
    product already exists.
@@ -68,7 +68,7 @@ The same file can be downloaded from Import/export or with
   - **Renaming a signature** (its name or category) changes the title, so DefectDojo sees new
     findings; the old ones stay open until closed.
   - **Renaming a scan profile** creates a new test; the old test stays open with its findings.
-  - **Close findings that disappear** (`close_old_findings`) closes, within a profile's test,
+  - **Close findings in DefectDojo when they disappear** (`close_old_findings`) closes, within a profile's test,
     findings missing from the latest run. Runs without a profile (imported files) go to the
     `RampartEye – ad-hoc` test and never close old findings. (`ramparteye scan <targets>` uses
     the `CLI` profile, so it behaves like any other profile.)

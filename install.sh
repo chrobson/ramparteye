@@ -218,9 +218,9 @@ RAMPART_TZ=UTC
 #RAMPART_SCAN_EXCLUDE=
 # Allowed TCP ports (empty: any).
 #RAMPART_SCAN_PORTS=
-# SYN scan (-sS) instead of connect scan (-sT): add cap_add NET_RAW and
-# NET_ADMIN to the app service and set RAMPART_NMAP_PATH and NMAP_PRIVILEGED
-# as in compose.demo.yml.
+# SYN scan (-sS) instead of connect scan (-sT): as in compose.demo.yml, give
+# the app service cap_add NET_RAW and NET_ADMIN, remove no-new-privileges
+# (security_opt: !reset []), and set RAMPART_NMAP_PATH and NMAP_PRIVILEGED.
 #RAMPART_SCAN_PRIVILEGED=false
 #RAMPART_NMAP_PATH=nmap
 # Packets per second across all scans.

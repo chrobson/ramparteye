@@ -64,9 +64,23 @@ You need Docker with Compose 2.24 or later.
 curl -fsSL https://raw.githubusercontent.com/chrobson/ramparteye/main/install.sh | sh -s -- --demo
 ```
 
+> **Until the first public release** the GHCR image is not published yet, so the line above
+> does not work. Build the image from a checkout and install from it instead:
+>
+> ```sh
+> git clone https://github.com/chrobson/ramparteye && cd ramparteye
+> make image                                      # builds ramparteye:dev
+> RAMPART_INSTALL_LOCAL_IMAGE=ramparteye:dev ./install.sh --demo
+> ```
+>
+> The same works for a real scope (`--scope ...` instead of `--demo`). The install then lives in
+> `./ramparteye` inside the checkout; to change the lab, stay in the checkout and run
+> `set -a && . ramparteye/.env && set +a && lab/change.sh run2`.
+
 Open <http://localhost:9080>, sign in with one of the four demo accounts printed at the end
-(admin, operator, analyst, viewer), go to **Scans** and run the **Demo** profile (about 3.5
-minutes). Then change the lab and scan again to see change detection at work:
+(admin, operator, analyst, viewer), open **Configure → Scan profiles** and press **Run now** on
+the **Demo** profile (about 3.5 minutes). Then change the lab and run it again to see change
+detection at work:
 
 ```sh
 git clone https://github.com/chrobson/ramparteye ramparteye-src && cd ramparteye-src
@@ -158,7 +172,7 @@ change detection, a provable safety budget and DefectDojo. How it relates to wel
 
 | | Focus | Where RampartEye differs |
 |---|---|---|
-| [runZero](https://www.runzero.com/) | Commercial asset inventory and exposure management, very deep fingerprinting, SaaS console with on-prem explorers | Open source and fully self-hosted; less fingerprint depth, but a safety receipt per scan, transparent scoring and native DefectDojo push |
+| [runZero](https://www.runzero.com/) | Commercial asset inventory and exposure management with very deep fingerprinting; cloud console with on-prem explorers, or a self-hosted console | Open source and fully self-hosted; less fingerprint depth, but a safety receipt per scan, transparent scoring and native DefectDojo push |
 | [IVRE](https://ivre.rocks/) | Open-source network recon framework (Python): stores nmap/masscan/passive data, "your own Shodan" | RampartEye schedules and diffs scans for you, explains changes in plain language and ranks services; IVRE is the better toolbox for large-scale research and passive data |
 | [ProjectDiscovery](https://projectdiscovery.io/) (naabu, httpx, nuclei) | Fast CLI building blocks for recon and active vulnerability checks, mostly internet-facing | RampartEye is a long-running service with history and a UI; it imports only the passive subset of nuclei templates and never sends payloads |
 | [reNgine](https://github.com/yogeshojha/rengine), [Amass](https://github.com/owasp-amass/amass) | External recon: subdomain enumeration, OSINT, web reconnaissance of internet targets | RampartEye does no internet recon at all: it inventories internal address space you are authorised to scan |

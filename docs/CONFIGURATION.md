@@ -74,14 +74,14 @@ These are read by `compose.yml` itself.
 | Variable | Default | Meaning |
 |---|---|---|
 | `RAMPART_MAX_RATE` | `5000` | Packets/s upper bound of every run; profiles may only set less. |
-| `RAMPART_SCAN_PRIVILEGED` | `false` | SYN scan (`-sS`) instead of connect scan (`-sT`). Needs `cap_add: [NET_RAW, NET_ADMIN]`, `RAMPART_NMAP_PATH=/usr/local/bin/nmap-privileged` and `NMAP_PRIVILEGED=1`, as in `compose.demo.yml`. |
+| `RAMPART_SCAN_PRIVILEGED` | `false` | SYN scan (`-sS`) instead of connect scan (`-sT`). Needs, as in `compose.demo.yml`: `cap_add: [NET_RAW, NET_ADMIN]`, no `no-new-privileges` (`security_opt: !reset []`, otherwise the nmap copy's file capabilities are ignored), `RAMPART_NMAP_PATH=/usr/local/bin/nmap-privileged` and `NMAP_PRIVILEGED=1`. |
 | `RAMPART_NMAP_PATH` | `nmap` | nmap binary. |
 | `RAMPART_ALL_PORTS_MAX_ADDRS` | `16` | The `auto` port profile scans all 65535 ports for chunks of at most this many addresses (0 disables); otherwise the top 1000 ports plus a pass over common infrastructure ports. |
 | `RAMPART_TICK_EVERY` | `1m` | Scheduler tick: how often scheduled profiles and paused runs are checked. |
 
 Scan profiles (Configure → Scan profiles) set the targets, port profile (`auto`, `top`, `list`,
 `all`), packets/s, worker count, an optional time window and schedule. A run is split into /24
-chunks; each chunk is tried up to 3 times. Runs started with "Scan now" ignore the window. A run
+chunks; each chunk is tried up to 3 times. Runs started with "Run now" ignore the window. A run
 stopped by a shutdown or by the end of its window resumes on a later scheduler tick, as long as
 its profile is enabled.
 
@@ -132,7 +132,6 @@ comes from the environment and the form is read-only.
 | `RAMPART_DOJO_ENGAGEMENT` | `Continuous discovery` | Engagement. |
 | `RAMPART_DOJO_AUTO_PUSH` | `true` | Push every completed run. |
 | `RAMPART_DOJO_CLOSE_MISSING` | `false` | Close findings that are no longer seen (`close_old_findings`). |
-| `RAMPART_DOJO_USER`, `RAMPART_DOJO_PASSWORD` | (empty) | Accepted but not used by this version: authentication is by API token only. |
 
 See [DEFECTDOJO.md](DEFECTDOJO.md).
 
@@ -144,13 +143,13 @@ The image's default command is `serve`. Other commands run in the app container,
 | Command | Purpose |
 |---|---|
 | `serve` | Web UI, scan scheduler and DefectDojo auto-push. |
-| `scan --profile NAME` / `scan <target>...` | Scan now. Targets given on the command line go into a profile named `CLI`. Refused without a scope. |
+| `scan --profile NAME` / `scan <target>...` | Run a scan now. Targets given on the command line go into a profile named `CLI`. Refused without a scope. |
 | `verify <expected.json> [--run ID] [--min 0.9]` | Precision/recall of a run against a lab expectation file. |
 | `import <file>` | Import nmap XML or DefectDojo Generic Findings JSON as a run. |
 | `export [--format csv\|json\|dojo] [--run ID]` | Export a finished run to stdout. |
 | `migrate` | Apply database migrations (also done by `serve`). |
 | `seed-demo <cidr> [names...]` | Add demo targets and the scan profile "Demo". |
-| `audit [run]` | Safety receipt of a run as JSON; non-zero exit when a check fails. |
+| `audit [run]` | Safety receipt of a run as JSON; non-zero exit unless every check passed (a failed or unmeasured check, i.e. `failed` or `incomplete`). |
 | `dojo push [--run ID]` | Push a run to DefectDojo now. |
 | `reset-admin [--login NAME]` | New one-time password for a user (default `admin`). |
 | `version` | Print the version. |

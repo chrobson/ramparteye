@@ -10,7 +10,8 @@ admin panels (phpMyAdmin, Adminer, Tomcat Manager, Jenkins, Grafana, Kibana, Tra
 stats...), CMSs (WordPress, Drupal, Joomla), management APIs (Spring Boot Actuator, NATS
 monitoring, Toxiproxy), unauthenticated services (Redis, MQTT), TLS problems (expired,
 self-signed), staging environments and more. Built-ins can be enabled or disabled but not edited
-or deleted; copy one into a new signature to start your own.
+or deleted; to start your own, copy a built-in's YAML manually into a new signature and change
+its `id`.
 
 ## Managing signatures
 
@@ -66,7 +67,7 @@ DefectDojo (`remediation` as mitigation).
 | `tls` | `expired`, `self_signed`, `hostname_mismatch` | flags on the leaf certificate (all given must be true) |
 | `hostname` | `regex` | a host name the address is known by |
 | `service` | `product`, `banner`, `ports` | nmap fields: product + version, banner + extra info, port list; no HTTP needed |
-| `path` | `path`, `method`, `status`, `regex`, `header`, `header_regex` | one extra `GET` (default) or `HEAD` request to the same service |
+| `path` | `path`, `method`, `headers`, `status`, `regex`, `header`, `header_regex` | one extra `GET` (default) or `HEAD` request to the same service |
 
 Modifiers on a matcher:
 

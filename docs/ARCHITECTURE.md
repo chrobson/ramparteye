@@ -49,7 +49,7 @@ orchestration and DefectDojo pusher all run in `ramparteye serve`; the other sub
 
 ## A scan run
 
-1. **Create.** A profile (manual "Scan now", the scheduler, or the `scan` CLI) is expanded into
+1. **Create.** A profile (manual "Run now", the scheduler, or the `scan` CLI) is expanded into
    targets, each target is checked against the scope, and the address space is split into /24
    chunks stored with a new `queued` run.
 2. **Execute.** K workers lease chunks from the database (`FOR UPDATE SKIP LOCKED`), so several
@@ -61,7 +61,7 @@ orchestration and DefectDojo pusher all run in `ramparteye serve`; the other sub
    - Phase 2: service detection (`-sV`) on the port plan of the profile: `auto` (all ports for
      small targets, otherwise top 1000), `top`, `list` or `all`, plus a pass over infrastructure
      ports outside the top 1000 (MQTT, Redis, Docker API, Elasticsearch, Kubernetes, ...).
-   A failing chunk is retried up to 3 times with backoff. At the end of a scan window the run
+   A failing chunk is tried up to 3 times, with backoff between attempts. At the end of a scan window the run
    pauses and resumes in the next window.
 3. **Post-process** once every chunk is finished: HTTP(S) services are fingerprinted (GET/HEAD,
    20 requests/s, burst 5), signatures are evaluated on every service (path probes within the

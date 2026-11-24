@@ -54,7 +54,7 @@ unauthorised scanning acceptable.
 - `RAMPART_MAX_RATE` (default 5000 packets/s) caps every run; a profile can only set a lower rate,
   which is split across its workers.
 - Scan profiles have time windows. A run that reaches the end of its window is paused and
-  resumes in the next window. Manual runs ("Scan now") ignore the window.
+  resumes in the next window. Manual runs ("Run now") ignore the window.
 - Signature path probes count against a per-host budget per run,
   `RAMPART_PATH_PROBES_PER_HOST` (default 50; 0 disables path probes entirely).
 - `RAMPART_SCAN_PORTS` restricts which TCP ports may be scanned at all.
@@ -79,7 +79,7 @@ five checks are derived from it:
 A check that could not be measured is reported as `unmeasured`, never as a pass. The verdict is
 `ok`, `incomplete` or `failed`. The receipt is on each run's page, as JSON at
 `/runs/{id}/safety.json`, and from the CLI: `ramparteye audit [run]` prints it and exits non-zero
-when a check failed.
+unless every check passed (so `incomplete` fails too).
 
 ## 5. Cancel all scans
 
@@ -100,7 +100,7 @@ run. Queued and paused runs are marked cancelled at once, and a run executing in
   (`docker compose logs app | grep "shown once"`) and a forced password change on the first
   login. The four demo accounts exist only with `--demo`. Restarts never create or print a new
   password.
-- Passwords are 8-72 characters, stored with bcrypt. Sessions last 12 hours (`rampart_session`
+- Passwords are 8-72 bytes (the bcrypt limit), stored with bcrypt. Sessions last 12 hours (`rampart_session`
   cookie, HttpOnly, SameSite); forms are CSRF-protected; pages carry a strict Content Security
   Policy.
 - **Login throttle.** After 5 failed attempts within 15 minutes, a login is locked for the rest of
@@ -151,8 +151,12 @@ on the host.
   then published on the host loopback only (`127.0.0.1:55432`, `RAMPART_DB_PORT`).
 - The app container runs as a non-root user with a read-only file system, all capabilities
   dropped and `no-new-privileges`. Because capabilities are dropped, `RAMPART_PORT` below 1024 is
-  not supported. Connect scans (`-sT`) need no privileges; SYN scans need `NET_RAW`/`NET_ADMIN`
-  for a separate nmap copy (the demo lab does this).
+  not supported. Connect scans (`-sT`) need no privileges. SYN scans use a separate nmap copy
+  with file capabilities: the container needs `cap_add: [NET_RAW, NET_ADMIN]` and must drop
+  `no-new-privileges` (`security_opt: !reset []`), with `RAMPART_SCAN_PRIVILEGED=true`,
+  `RAMPART_NMAP_PATH=/usr/local/bin/nmap-privileged` and `NMAP_PRIVILEGED=1`, as in
+  `compose.demo.yml`. That widens the container's privileges; keep connect scans unless you need
+  SYN scans or ARP discovery.
 - DefectDojo **Test connection** makes the server send requests to the configured URL and may
   show parts of the response in error messages. It is an Admin-only (`settings.admin`) action;
   treat that permission as trusted.
