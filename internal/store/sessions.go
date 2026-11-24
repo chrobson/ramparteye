@@ -15,13 +15,18 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID int6
 	return nil
 }
 
-// SessionUser returns the user owning a non-expired session, or
+// SessionUser returns the user owning a session that is not expired now, or
 // ErrUserNotFound.
 func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (User, error) {
+	return s.SessionUserAt(ctx, tokenHash, time.Now())
+}
+
+// SessionUserAt is SessionUser with an explicit clock.
+func (s *Store) SessionUserAt(ctx context.Context, tokenHash []byte, now time.Time) (User, error) {
 	return scanUser(s.db.QueryRow(ctx, `SELECT `+userCols+` FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		JOIN roles r ON r.id = u.role_id
-		WHERE s.token_hash = $1 AND s.expires_at > now()`, tokenHash))
+		WHERE s.token_hash = $1 AND s.expires_at > $2`, tokenHash, now))
 }
 
 // DeleteSession removes one session.

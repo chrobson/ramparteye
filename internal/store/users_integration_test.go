@@ -235,3 +235,16 @@ func TestBootstrapEnsureWithStore(t *testing.T) {
 	assert.Equal(t, "", out.String())
 	assert.Equal(t, 1, must.Value(s.CountUsers(ctx)))
 }
+
+func TestSessionUserAtUsesGivenClock(t *testing.T) {
+	s, _ := newStore(t)
+	id := must.Value(s.CreateUser(ctx, model.NewUser{Login: "bob", PasswordHash: "h", Role: "Viewer"}))
+	exp := time.Now().Add(time.Hour)
+	assert.NoError(t, s.CreateSession(ctx, []byte("tok"), id, exp))
+
+	u, err := s.SessionUserAt(ctx, []byte("tok"), exp.Add(-time.Minute))
+	assert.NoError(t, err)
+	assert.Equal(t, "bob", u.Login)
+	_, err = s.SessionUserAt(ctx, []byte("tok"), exp.Add(time.Minute))
+	assert.ErrorIs(t, store.ErrUserNotFound, err)
+}

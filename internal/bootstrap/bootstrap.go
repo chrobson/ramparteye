@@ -9,8 +9,7 @@ import (
 	"math/big"
 	"strings"
 
-	"golang.org/x/crypto/bcrypt"
-
+	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/model"
 )
@@ -45,7 +44,7 @@ var demoAccounts = []account{
 // stored, and never again: a restart with existing users does nothing and
 // prints nothing.
 func Ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer) (Result, error) {
-	return ensure(ctx, st, cfg, out, bcryptHash)
+	return ensure(ctx, st, cfg, out, auth.HashPassword)
 }
 
 func ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer, hash func(string) (string, error)) (Result, error) {
@@ -98,11 +97,6 @@ func ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer, has
 		return Result{}, fmt.Errorf("bootstrap: print credentials: %w", err)
 	}
 	return Result{AdminCreated: true, DemoAccounts: cfg.Demo}, nil
-}
-
-func bcryptHash(pw string) (string, error) {
-	h, err := bcrypt.GenerateFromPassword([]byte(pw), bcrypt.DefaultCost)
-	return string(h), err
 }
 
 func generatePassword() (string, error) {

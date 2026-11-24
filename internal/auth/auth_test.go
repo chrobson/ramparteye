@@ -1,0 +1,307 @@
+package auth
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ctx42/testing/pkg/assert"
+
+	"github.com/chrobson/ramparteye/internal/store"
+)
+
+func init() { bcryptCost = 4 }
+
+var t0 = time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
+
+type fakeStore struct {
+	users    map[string]store.User
+	sessions map[string]sess
+}
+
+type sess struct {
+	userID  int64
+	expires time.Time
+}
+
+func newFake(users ...store.User) *fakeStore {
+	f := &fakeStore{users: map[string]store.User{}, sessions: map[string]sess{}}
+	for _, u := range users {
+		f.users[u.Login] = u
+	}
+	return f
+}
+
+func (f *fakeStore) UserByLogin(_ context.Context, login string) (store.User, error) {
+	u, ok := f.users[login]
+	if !ok {
+		return store.User{}, store.ErrUserNotFound
+	}
+	return u, nil
+}
+
+func (f *fakeStore) CreateSession(_ context.Context, h []byte, uid int64, exp time.Time) error {
+	f.sessions[string(h)] = sess{uid, exp}
+	return nil
+}
+
+func (f *fakeStore) SessionUserAt(_ context.Context, h []byte, now time.Time) (store.User, error) {
+	s, ok := f.sessions[string(h)]
+	if !ok || !s.expires.After(now) {
+		return store.User{}, store.ErrUserNotFound
+	}
+	for _, u := range f.users {
+		if u.ID == s.userID {
+			return u, nil
+		}
+	}
+	return store.User{}, store.ErrUserNotFound
+}
+
+func (f *fakeStore) DeleteSession(_ context.Context, h []byte) error {
+	delete(f.sessions, string(h))
+	return nil
+}
+
+func permStrings(role string) []string {
+	var out []string
+	for _, p := range BuiltinRoles[role] {
+		out = append(out, string(p))
+	}
+	return out
+}
+
+func mkUser(id int64, login, role, pw string, must bool) store.User {
+	h, err := HashPassword(pw)
+	if err != nil {
+		panic(err)
+	}
+	return store.User{ID: id, Login: login, PasswordHash: h, RoleName: role,
+		Perms: permStrings(role), MustChangePassword: must}
+}
+
+func okHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+}
+
+func TestBuiltinRolesMatrix(t *testing.T) {
+	want := map[string]map[Perm]bool{
+		RoleAdmin:    {},
+		RoleOperator: {},
+		RoleAnalyst:  {PermTargetsRead: true, PermResultsRead: true, PermResultsEdit: true, PermExport: true},
+		RoleViewer:   {PermTargetsRead: true, PermResultsRead: true},
+	}
+	for _, p := range AllPerms {
+		want[RoleAdmin][p] = true
+		want[RoleOperator][p] = p != PermUsersAdmin && p != PermSettingsAdmin
+	}
+	assert.Len(t, 4, BuiltinRoles)
+	for role, perms := range want {
+		for _, p := range AllPerms {
+			u := User{Perms: BuiltinRoles[role]}
+			assert.Equal(t, perms[p], u.Can(p), "%s %s", role, p)
+		}
+	}
+}
+
+func TestCanWithoutUser(t *testing.T) {
+	assert.False(t, Can(context.Background(), PermTargetsRead))
+	ctx := WithUser(context.Background(), User{Perms: []Perm{PermExport}})
+	assert.True(t, Can(ctx, PermExport))
+	assert.False(t, Can(ctx, PermScansRun))
+}
+
+func TestPasswordLimits(t *testing.T) {
+	_, err := HashPassword("short")
+	assert.ErrorIs(t, ErrWeakPassword, err)
+	_, err = HashPassword(strings.Repeat("a", 73))
+	assert.ErrorIs(t, ErrLongPassword, err)
+	h, err := HashPassword(strings.Repeat("a", 72))
+	assert.NoError(t, err)
+	assert.True(t, CheckPassword(h, strings.Repeat("a", 72)))
+	assert.False(t, CheckPassword(h, "wrong-password"))
+}
+
+// handlerChain builds Middleware -> mux with a protected POST route.
+func handlerChain(f *fakeStore, now func() time.Time) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("POST /annotations", Require(PermResultsEdit)(okHandler()))
+	mux.Handle("/", okHandler())
+	return Middleware(f, now)(mux)
+}
+
+func loginAs(t *testing.T, f *fakeStore, login, pw string) string {
+	t.Helper()
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	tok, _, err := a.Login(context.Background(), login, pw, "10.0.0.1")
+	assert.NoError(t, err)
+	return tok
+}
+
+func reqWithCookie(method, path, tok string) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.AddCookie(&http.Cookie{Name: CookieName, Value: tok})
+	return r
+}
+
+func TestViewerCannotEdit(t *testing.T) {
+	f := newFake(mkUser(1, "vic", RoleViewer, "password-1", false),
+		mkUser(2, "ann", RoleAnalyst, "password-2", false))
+	h := handlerChain(f, func() time.Time { return t0 })
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, reqWithCookie("POST", "/annotations", loginAs(t, f, "vic", "password-1")))
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, reqWithCookie("POST", "/annotations", loginAs(t, f, "ann", "password-2")))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestRequireWithoutSession(t *testing.T) {
+	h := handlerChain(newFake(), func() time.Time { return t0 })
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/annotations", nil))
+	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Equal(t, "/login?next=%2F", rec.Header().Get("Location"))
+
+	r := httptest.NewRequest("POST", "/annotations", nil)
+	r.Header.Set("HX-Request", "true")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Equal(t, "/login", rec.Header().Get("HX-Redirect"))
+}
+
+func TestLockoutAfterFive(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	now := t0
+	a := NewAuthenticator(f, f, func() time.Time { return now })
+	ctx := context.Background()
+
+	for range MaxLoginFailures {
+		_, _, err := a.Login(ctx, "ann", "wrong-password", "10.0.0.1")
+		assert.ErrorIs(t, ErrBadCredentials, err)
+	}
+	// Even the right password is refused while locked, from any address.
+	_, _, err := a.Login(ctx, "ann", "right-password", "10.0.0.9")
+	assert.ErrorIs(t, ErrLocked, err)
+	assert.Len(t, 0, f.sessions)
+
+	now = now.Add(LoginFailureWindow)
+	_, _, err = a.Login(ctx, "ann", "right-password", "10.0.0.9")
+	assert.NoError(t, err)
+}
+
+func TestLoginUnknownUserCountsAsFailure(t *testing.T) {
+	a := NewAuthenticator(newFake(), newFake(), func() time.Time { return t0 })
+	for range MaxLoginFailures {
+		_, _, err := a.Login(context.Background(), "ghost", "whatever-pw", "10.0.0.1")
+		assert.ErrorIs(t, ErrBadCredentials, err)
+	}
+	_, _, err := a.Login(context.Background(), "ghost", "whatever-pw", "10.0.0.1")
+	assert.ErrorIs(t, ErrLocked, err)
+}
+
+func TestSessionStoresOnlyTokenHash(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "password-2", false))
+	tok := loginAs(t, f, "ann", "password-2")
+	assert.Len(t, 43, tok) // 32 bytes, base64url without padding
+	assert.Len(t, 1, f.sessions)
+	for k := range f.sessions {
+		assert.Equal(t, string(HashToken(tok)), k)
+		assert.NotEqual(t, tok, k)
+	}
+}
+
+func TestSessionExpiresAfter12h(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "password-2", false))
+	now := t0
+	a := NewAuthenticator(f, f, func() time.Time { return now })
+	tok, exp, err := a.Login(context.Background(), "ann", "password-2", "10.0.0.1")
+	assert.NoError(t, err)
+	assert.Equal(t, t0.Add(12*time.Hour), exp)
+
+	h := handlerChain(f, func() time.Time { return now })
+	call := func() int {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, reqWithCookie("POST", "/annotations", tok))
+		return rec.Code
+	}
+	now = t0.Add(12*time.Hour - time.Second)
+	assert.Equal(t, http.StatusOK, call())
+	now = t0.Add(12 * time.Hour)
+	assert.Equal(t, http.StatusSeeOther, call()) // session gone: redirected to login
+}
+
+func TestLogoutDeletesSession(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "password-2", false))
+	tok := loginAs(t, f, "ann", "password-2")
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	assert.NoError(t, a.Logout(context.Background(), reqWithCookie("POST", "/logout", tok)))
+	assert.Len(t, 0, f.sessions)
+}
+
+func TestMustChangePasswordRedirects(t *testing.T) {
+	f := newFake(mkUser(1, "adm", RoleAdmin, "password-1", true))
+	h := handlerChain(f, func() time.Time { return t0 })
+	tok := loginAs(t, f, "adm", "password-1")
+
+	for _, p := range []string{"/", "/targets", "/api/targets", "/annotations", "/staticx/app.css"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, reqWithCookie("GET", p, tok))
+		assert.Equal(t, http.StatusSeeOther, rec.Code, p)
+		assert.Equal(t, "/account/password", rec.Header().Get("Location"), p)
+	}
+	for _, p := range []string{"/account/password", "/logout", "/static/app.css"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, reqWithCookie("GET", p, tok))
+		assert.Equal(t, http.StatusOK, rec.Code, p)
+	}
+}
+
+func TestSessionCookieAttributes(t *testing.T) {
+	rec := httptest.NewRecorder()
+	SetSessionCookie(rec, httptest.NewRequest("GET", "/", nil), "tok", t0.Add(SessionTTL), t0)
+	c := rec.Result().Cookies()[0]
+	assert.Equal(t, "rampart_session", c.Name)
+	assert.True(t, c.HttpOnly)
+	assert.False(t, c.Secure)
+	assert.Equal(t, http.SameSiteLaxMode, c.SameSite)
+	assert.Equal(t, 12*3600, c.MaxAge)
+
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	rec = httptest.NewRecorder()
+	SetSessionCookie(rec, r, "tok", t0.Add(SessionTTL), t0)
+	assert.True(t, rec.Result().Cookies()[0].Secure)
+
+	rec = httptest.NewRecorder()
+	ClearSessionCookie(rec, r)
+	assert.Equal(t, -1, rec.Result().Cookies()[0].MaxAge)
+}
+
+func TestCSRFRejectsMissingToken(t *testing.T) {
+	h := CSRF(okHandler())
+	post := func(hdr map[string]string) int {
+		r := httptest.NewRequest("POST", "http://rampart.local/targets", nil)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	assert.Equal(t, http.StatusForbidden, post(map[string]string{"Sec-Fetch-Site": "cross-site"}))
+	assert.Equal(t, http.StatusForbidden, post(map[string]string{"Origin": "https://evil.example"}))
+	assert.Equal(t, http.StatusOK, post(map[string]string{"Sec-Fetch-Site": "same-origin"}))
+	assert.Equal(t, http.StatusOK, post(nil)) // non-browser client
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
