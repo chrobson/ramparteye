@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sT -sV -oX - 10.20.0.0/29" start="1795000000" version="7.95" xmloutputversion="1.05">
+<host starttime="1795000001" endtime="1795000009"><status state="up" reason="syn-ack" reason_ttl="0"/>
+<address addr="10.20.0.11" addrtype="ipv4"/>
+<hostnames><hostname name="web.lab.test" type="PTR"/></hostnames>
+<ports>
+<port protocol="tcp" portid="22"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="ssh" product="OpenSSH" version="9.6p1" extrainfo="protocol 2.0" method="probed" conf="10"><cpe>cpe:/a:openbsd:openssh:9.6p1</cpe></service></port>
+<port protocol="tcp" portid="443"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="http" product="nginx" version="1.27.4" tunnel="ssl" method="probed" conf="10"><cpe>cpe:/a:f5:nginx:1.27.4</cpe></service></port>
+<port protocol="tcp" portid="8081"><state state="closed" reason="conn-refused" reason_ttl="0"/><service name="blackice-icecap" method="table" conf="3"/></port>
+</ports>
+</host>
+<host><status state="up" reason="syn-ack" reason_ttl="0"/>
+<address addr="10.20.0.14" addrtype="ipv4"/>
+<address addr="02:42:0A:14:00:0E" addrtype="mac"/>
+<hostnames/>
+<ports>
+<port protocol="tcp" portid="80"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="http" method="table" conf="3"/><script id="banner" output="HTTP/1.1 200 OK"/></port>
+<port protocol="udp" portid="53"><state state="open" reason="udp-response" reason_ttl="0"/><service name="domain" product="dnsmasq" version="2.90"/></port>
+</ports>
+</host>
+<host><status state="down" reason="no-response" reason_ttl="0"/>
+<address addr="10.20.0.15" addrtype="ipv4"/>
+</host>
+<runstats><finished time="1795000010" elapsed="9.5" exit="success"/><hosts up="2" down="1" total="3"/></runstats>
+</nmaprun>
