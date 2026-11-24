@@ -163,14 +163,14 @@ func TestFindingsCarryCWEAndAttack(t *testing.T) {
 	}
 
 	assert.Equal(t, 668, got.CWE)
-	assert.Equal(t, "Restrict phpMyAdmin to the administration network.", got.Mitigation)
-	assert.Equal(t, "https://docs.phpmyadmin.net/en/latest/setup.html#securing-your-phpmyadmin-installation\n"+
-		"https://cwe.mitre.org/data/definitions/668.html\n"+
-		"https://attack.mitre.org/techniques/T1078/\n"+
-		"https://attack.mitre.org/techniques/T1190/", got.References)
+	assert.Equal(t, "`Restrict phpMyAdmin to the administration network.`", got.Mitigation)
+	assert.Equal(t, "`https://docs.phpmyadmin.net/en/latest/setup.html#securing-your-phpmyadmin-installation`\n"+
+		"`https://cwe.mitre.org/data/definitions/668.html`\n"+
+		"`https://attack.mitre.org/techniques/T1078/`\n"+
+		"`https://attack.mitre.org/techniques/T1190/`", got.References)
 	assert.Contain(t, "CWE-668", got.Description)
 	assert.Contain(t, "T1078, T1190", got.Description)
-	assert.Contain(t, "Restrict phpMyAdmin to the administration network.", got.Description)
+	assert.NotContain(t, "Restrict phpMyAdmin", got.Description)
 	tags := strings.Join(got.Tags, ",")
 	assert.Contain(t, "attack-t1078", tags)
 	assert.Contain(t, "attack-t1190", tags)
@@ -254,6 +254,11 @@ func TestStableHashFields(t *testing.T) {
 		}
 		for j := range b[i].Detections {
 			b[i].Detections[j].Confidence = 10
+			if m := b[i].Detections[j].Meta; m != nil {
+				m2 := *m
+				m2.Remediation = "A completely different fix."
+				b[i].Detections[j].Meta = &m2
+			}
 			b[i].Detections[j].Evidence = map[string]string{"version": "1.2.3", "meta_generator": "changed"}
 		}
 	}
@@ -311,4 +316,21 @@ func TestTitleCappedAt500(t *testing.T) {
 	d := model.Detection{SignatureID: "x", Name: strings.Repeat("n", 600)}
 
 	assert.Len(t, 500, detectionTitle(d))
+}
+
+func TestHostileRemediationAndReferences(t *testing.T) {
+	hostile := "[click](http://evil) ![](http://t) <b>x</b>"
+	s := Service{ServiceObs: model.ServiceObs{Key: key("10.0.0.1", 80, "tcp")},
+		Detections: []model.Detection{{SignatureID: "sig", Name: "Na[me](x)!<b>", Category: "cms",
+			Meta: &model.SignatureMeta{CWE: []int{79}, Remediation: hostile, References: []string{"http://e/`](x)"}}}}}
+
+	fs := BuildFindings(runDate, []Service{s}, nil)
+
+	f := fs[1]
+	assert.Equal(t, "Technology detected: Namexb", f.Title)
+	assert.Equal(t, "`"+hostile+"`", f.Mitigation)
+	assert.NotContain(t, hostile, f.Description)
+	assert.NotContain(t, "evil", f.Description)
+	assert.NotContain(t, "<b>", f.Description)
+	assert.Contain(t, "``http://e/`](x)``", f.References)
 }

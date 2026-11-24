@@ -180,7 +180,7 @@ func BuildFindings(date time.Time, svcs []Service, anns []Annotation) []model.Fi
 				if len(m.CWE) > 0 {
 					f.CWE = m.CWE[0]
 				}
-				f.Mitigation = m.Remediation
+				f.Mitigation = code(m.Remediation, 1024)
 				f.References = references(m)
 				for _, a := range m.Attack {
 					tags = append(tags, "attack-"+a)
@@ -212,6 +212,9 @@ func references(m *model.SignatureMeta) string {
 	}
 	for _, a := range m.Attack {
 		add("https://attack.mitre.org/techniques/" + strings.ReplaceAll(a, ".", "/") + "/")
+	}
+	for i, r := range refs {
+		refs[i] = code(r, 512)
 	}
 	return strings.Join(refs, "\n")
 }
@@ -267,7 +270,7 @@ func detectionTitle(d model.Detection) string {
 	if name == "" {
 		name = d.SignatureID
 	}
-	name = oneLine(name)
+	name = titleText(name)
 	var t string
 	switch {
 	case d.Evidence["outdated"] != "":
@@ -303,9 +306,6 @@ func detectionDescription(s Service, d model.Detection) string {
 			line(&b, "CWE", strings.Join(ids, ", "))
 		}
 		line(&b, "ATT&CK", strings.Join(m.Attack, ", "))
-		if r := oneLine(m.Remediation); r != "" {
-			b.WriteString("\nRemediation: " + r + "\n")
-		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -424,6 +424,17 @@ func truncate(s string, max int) string {
 		max--
 	}
 	return s[:max]
+}
+
+// titleText keeps a signature name plain for a DefectDojo title: whitespace
+// collapsed and markup characters dropped.
+func titleText(s string) string {
+	return oneLine(strings.Map(func(r rune) rune {
+		if strings.ContainsRune("[]()!<>", r) {
+			return -1
+		}
+		return r
+	}, s))
 }
 
 func oneLine(s string) string {
