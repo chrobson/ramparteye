@@ -233,7 +233,7 @@ func (s *Store) CancelRequested(ctx context.Context, runID int64) (bool, error) 
 }
 
 // CancelOpenRuns records a cancel request (by may be nil) for every
-// unfinished scan run, stopped ones included, and marks the runs that are
+// unfinished scan run and marks the runs that are
 // not running cancelled at once. A running run is left to the process
 // executing it, which honours the request at its next chunk boundary. It
 // returns the ids of every run a cancel was requested for and of the runs
