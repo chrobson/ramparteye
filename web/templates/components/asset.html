@@ -11,7 +11,7 @@
 <div class="heat" aria-hidden="true"><span></span>{{range .HourLabels}}<span>{{.}}</span>{{end}}</div>
 {{range .Heat}}<div class="heat"><span aria-hidden="true">{{.Day}}</span>{{range .Cells}}<i data-day="{{.Day}}" data-hour="{{.Hour}}" class="{{.Class}}" role="img" aria-label="{{.Label}}" title="{{.Label}}"></i>{{end}}</div>
 {{end}}</div>
-<p class="mt-2 text-xs text-muted">Darker is seen in more runs; red marks hours that were scanned but never seen; empty hours had no run.</p>{{end}}
+<p class="mt-2 text-xs text-muted">Darker = seen in more runs; <span class="text-bad">red</span> = scanned but never seen; empty = no run.</p>{{end}}
 
 {{/* Score breakdown. Data: []ReasonView. */}}
 {{define "reasons"}}{{if .}}<table class="tbl max-w-md"><thead><tr><th>Rule</th><th class="text-right">Points</th></tr></thead>

@@ -10,7 +10,7 @@
 {{template "runs-strip" $d.Avail.Runs}}
 <p class="mt-1">{{$d.Avail.Summary}}</p>
 {{template "bands" $d.Avail.Bands}}
-<p class="mt-2 text-xs text-muted">Last {{$d.Avail.Lookback}} finished scans that covered this address; times in UTC.</p>
+<p class="mt-2 text-xs text-muted">Last {{$d.Avail.Lookback}} finished scans; grey = not covered</p>
 </section>
 <section class="panel" aria-label="Changes of this asset">
 {{template "panel-title" "Changes of this asset"}}
@@ -20,7 +20,19 @@
 
 <section class="panel mt-4" aria-label="Availability this week">
 {{template "panel-title" "Availability this week"}}
-{{if $d.Avail.HasData}}{{template "heatmap" $d.Avail}}{{else}}<p class="text-muted">No finished scan covers this host yet.</p>{{end}}
+{{if $d.Avail.HasData}}<div class="grid gap-4 lg:grid-cols-[2fr_1fr]">
+<div>
+<p class="text-xs text-muted">weekday × hour across the last {{$d.Avail.Lookback}} scans (UTC)</p>
+{{template "heatmap" $d.Avail}}
+{{with $d.Avail.Plain}}<p class="mt-2 text-muted">{{.}}</p>{{end}}
+</div>
+<dl class="grid content-start gap-1">
+<div class="flex justify-between border-b border-row py-1"><dt>Pattern</dt><dd class="font-semibold">{{$d.Avail.Pattern}}</dd></div>
+<div class="flex justify-between border-b border-row py-1"><dt>Seen in runs</dt><dd class="font-mono font-semibold">{{$d.Avail.Seen}} / {{$d.Avail.Total}}</dd></div>
+<div class="flex justify-between border-b border-row py-1"><dt>Misses in a row</dt><dd class="font-mono font-semibold">{{$d.Avail.Misses}}</dd></div>
+{{if $d.InactiveAfter}}<div class="flex justify-between border-b border-row py-1"><dt>Marked inactive after</dt><dd class="font-semibold">{{$d.InactiveAfter}} misses</dd></div>{{end}}
+</dl>
+</div>{{else}}<p class="text-muted">No finished scan covers this host yet.</p>{{end}}
 </section>
 
 <section class="panel mt-4" aria-label="Services">
@@ -28,7 +40,7 @@
 {{if $d.Services}}<div class="overflow-x-auto"><table class="tbl">
 <thead><tr><th>Port</th><th>Product</th><th>Detections</th><th>Score</th></tr></thead>
 <tbody>{{range $d.Services}}<tr>
-<td class="font-mono"><a class="text-brand-fg underline" href="{{.Href}}">{{.Port}}</a>{{with .VHost}}<div class="text-xs text-muted">{{.}}</div>{{end}}{{if .Noted}} <span class="tag bg-info-bg text-fg">note</span>{{end}}</td>
+<td class="font-mono"><a class="text-brand-fg underline" href="{{.Href}}">{{.Port}}</a>{{with .VHost}}<div class="text-xs text-muted">{{template "cell" (dict "Value" . "Max" 60)}}</div>{{end}}{{if .Noted}} <span class="tag bg-info-bg text-fg">note</span>{{end}}</td>
 <td>{{template "cell" (dict "Value" .Product "Max" 60)}}</td>
 <td>{{range .Detections}}<span class="mr-1 inline-block">{{template "sev" .Severity}} {{template "cell" (dict "Value" .Name "Max" 40)}}</span>{{else}}<span class="text-dim">–</span>{{end}}</td>
 <td>{{template "score" .Score}}

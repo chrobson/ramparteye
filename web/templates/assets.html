@@ -1,14 +1,14 @@
 {{define "title"}}Assets{{end}}
 {{define "content"}}{{$d := .Data}}
 <h1 class="page-title">Assets</h1>
-<form class="panel mt-4" method="get" action="/assets" hx-get="/assets" hx-target="#assets-results" hx-swap="innerHTML" hx-push-url="true" hx-trigger="change, keyup changed delay:300ms from:#asset-q, submit">
+<form class="panel mt-4" method="get" action="/assets" hx-get="/assets" hx-target="#assets-results" hx-swap="innerHTML" hx-push-url="true" hx-trigger="submit">
 <div class="flex flex-wrap items-end gap-3">
-<label class="grow basis-48"><span class="lbl">Search</span><input id="asset-q" type="search" name="q" maxlength="200" class="input" value="{{$d.Filter.Text}}" placeholder="address, host name, product, detection"></label>
-<label><span class="lbl">State</span><select name="state" class="input"><option value="">Any</option>{{range $d.States}}<option value="{{.}}"{{if eq . $d.Filter.State}} selected{{end}}>{{.}}</option>{{end}}</select></label>
-<label><span class="lbl">Min score</span><input type="number" name="min" min="0" max="100" class="input w-20" value="{{if $d.Filter.Min}}{{$d.Filter.Min}}{{end}}"></label>
+<label class="grow basis-48"><span class="lbl">Search</span><input id="asset-q" type="search" hx-get="/assets" hx-trigger="keyup changed delay:300ms" hx-include="closest form" name="q" maxlength="200" class="input" value="{{$d.Filter.Text}}" placeholder="address, host name, product, detection"></label>
+<label><span class="lbl">State</span><select name="state" class="input" hx-get="/assets" hx-trigger="change" hx-include="closest form"><option value="">Any</option>{{range $d.States}}<option value="{{.}}"{{if eq . $d.Filter.State}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label><span class="lbl">Min score</span><input type="number" hx-get="/assets" hx-trigger="change" hx-include="closest form" name="min" min="0" max="100" class="input w-20" value="{{if $d.Filter.Min}}{{$d.Filter.Min}}{{end}}"></label>
 <button type="submit" class="btn">Apply</button>
 </div>
-<fieldset class="mt-3 flex flex-wrap gap-2"><legend class="sr-only">Quick filters</legend>
+<fieldset class="mt-3 flex flex-wrap gap-2" hx-get="/assets" hx-trigger="change" hx-include="closest form"><legend class="sr-only">Quick filters</legend>
 <label class="quick"><input type="radio" name="quick" value="" class="sr-only"{{if not $d.Filter.Quick}} checked{{end}}><span>All</span></label>
 {{range $d.Quick}}<label class="quick"><input type="radio" name="quick" value="{{.Key}}" class="sr-only"{{if eq .Key $d.Filter.Quick}} checked{{end}}><span>{{.Label}}</span></label>
 {{end}}</fieldset>
@@ -17,7 +17,7 @@
 {{end}}
 
 {{/* The result table; also the htmx fragment. */}}
-{{define "assets-results"}}{{$d := .Data}}{{if $d.Rows}}<p class="mb-2 text-muted">{{num $d.Total}} host{{if ne $d.Total 1}}s{{end}}{{if gt $d.Total $d.Limit}}, the first {{num $d.Limit}} shown. Narrow the filters to see the rest.{{end}}</p>
+{{define "assets-results"}}{{$d := .Data}}{{if $d.Error}}<p role="alert" class="alert-error">{{$d.Error}}</p>{{else if $d.Rows}}<p class="mb-2 text-muted">{{num $d.Total}} host{{if ne $d.Total 1}}s{{end}}{{if gt $d.Total $d.Limit}}, the first {{num $d.Limit}} shown. Narrow the filters to see the rest.{{end}}</p>
 <div class="overflow-x-auto"><table class="tbl">
 <thead><tr><th>Host</th><th>State</th><th>Services</th><th>Top finding</th><th>Score</th><th>Last seen</th></tr></thead>
 <tbody>{{range $d.Rows}}<tr>

@@ -111,6 +111,7 @@ type AssetsData struct {
 	Limit    int
 	HasRun   bool
 	Filtered bool
+	Error    string // inline message for an invalid filter (htmx requests)
 }
 
 // AssetRow is a host on the asset list.
@@ -319,6 +320,13 @@ func stateClass(k model.HostStateKind) string {
 func (s *Server) assetsList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Vary", "HX-Request")
 	f, err := parseAssetFilter(r.URL.Query())
+	htmx := r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") == ""
+	if err != nil && htmx {
+		msg := strings.TrimPrefix(err.Error(), errBadFilter.Error()+": ")
+		s.renderFragment(w, r, "assets", "assets-results", AssetsData{Error: "Invalid filter: " + msg + ".",
+			Quick: quickFilters, States: hostStateFilters, Limit: assetsLimit})
+		return
+	}
 	if err != nil {
 		s.renderError(w, r, errorData{Code: http.StatusBadRequest, Title: "Invalid filter",
 			Text: "One of the filters is not valid. Clear the filters and try again."})
@@ -334,7 +342,7 @@ func (s *Server) assetsList(w http.ResponseWriter, r *http.Request) {
 		HasRun: snap.RunID != 0, Limit: assetsLimit,
 		Filtered: f != assetFilter{}}
 	d.Rows, d.Total = snap.assetRows(f)
-	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") == "" {
+	if htmx {
 		s.renderFragment(w, r, "assets", "assets-results", d)
 		return
 	}
@@ -365,8 +373,6 @@ func (s *Server) renderFragment(w http.ResponseWriter, r *http.Request, page, na
 
 var protos = map[string]bool{"tcp": true, "udp": true, "sctp": true}
 
-const maxVHost = 253
-
 // parseIP accepts a plain IP address; IPv4-mapped addresses are unmapped
 // and zones are refused.
 func parseIP(s string) (netip.Addr, bool) {
@@ -384,19 +390,6 @@ func parsePort(s string) (uint16, bool) {
 		return 0, false
 	}
 	return uint16(n), true
-}
-
-func validVHost(s string) bool {
-	if len(s) > maxVHost {
-		return false
-	}
-	for _, c := range s {
-		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_'
-		if !ok {
-			return false
-		}
-	}
-	return true
 }
 
 // assetPath returns the page URL of a key (host page for port 0).

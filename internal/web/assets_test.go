@@ -11,6 +11,7 @@ import (
 
 	"github.com/ctx42/testing/pkg/assert"
 
+	"github.com/chrobson/ramparteye/internal/diff"
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/store"
 )
@@ -165,7 +166,7 @@ func TestServiceScoreBreakdown(t *testing.T) {
 	assert.Contain(t, "+5", body) // unstable host
 	assert.Contain(t, "detection MySQL without auth: High", body)
 	assert.Contain(t, "database or cache reachable from the network", body)
-	assert.Contain(t, "63", body)
+	assert.Contain(t, `<b class="font-mono">63</b>/100`, body)
 }
 
 func TestServicePageHTTPDetails(t *testing.T) {
@@ -311,6 +312,27 @@ func TestAssetsListFilters(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAssetsListInvalidFilterHTMX(t *testing.T) {
+	e, c := assetEnv(t)
+	req := newGet("/assets?min=999", c)
+	req.Header.Set("HX-Request", "true")
+
+	rec := serve(e, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contain(t, "Invalid filter: min must be 0-100.", rec.Body.String())
+	assert.NotContain(t, "<html", rec.Body.String())
+}
+
+func TestAssetsSearchTriggersOnce(t *testing.T) {
+	e, c := assetEnv(t)
+
+	body := e.get("/assets", c).Body.String()
+
+	assert.Equal(t, 1, strings.Count(body, `hx-trigger="keyup changed delay:300ms"`))
+	assert.NotContain(t, "change, keyup", body)
 }
 
 func TestAssetsListInvalidFilters(t *testing.T) {
@@ -498,4 +520,88 @@ func manyTags(n int) string {
 		tags = append(tags, "t"+strconv.Itoa(i))
 	}
 	return strings.Join(tags, ",")
+}
+
+func TestHeatmapPanelPerMockup(t *testing.T) {
+	e, c := assetEnv(t)
+	e.srv.d.Cfg.Unstable.InactiveAfterMisses = 3
+	mon := time.Date(2026, 11, 23, 9, 0, 0, 0, time.UTC)
+	e.st.assets.history = map[model.AssetKey]store.AssetTimeline{{IP: mustAddr(hostUnstable)}: {Runs: []store.AssetRun{
+		{RunID: 1, StartedAt: mon, Covered: true, Seen: true},
+		{RunID: 2, StartedAt: mon.Add(26 * time.Hour), Covered: true, Seen: false},
+		{RunID: 3, StartedAt: mon.Add(27 * time.Hour), Covered: false},
+		{RunID: 4, StartedAt: mon.Add(50 * time.Hour), Covered: true, Seen: false},
+	}}}
+
+	body := e.get("/assets/"+hostUnstable, c).Body.String()
+
+	assert.Contain(t, "weekday × hour across the last 30 scans (UTC)", body)
+	assert.Contain(t, "Last 30 finished scans; grey = not covered", body)
+	assert.Contain(t, "Seen in runs", body)
+	assert.Contain(t, `<dd class="font-mono font-semibold">1 / 3</dd>`, body)
+	assert.Contain(t, "Misses in a row", body)
+	assert.Contain(t, `<dd class="font-mono font-semibold">2</dd>`, body)
+	assert.Contain(t, "Marked inactive after</dt><dd class=\"font-semibold\">3 misses", body)
+}
+
+func TestPlainSummary(t *testing.T) {
+	week := func(weekendSeen bool) []diff.RunPresence {
+		var runs []diff.RunPresence
+		mon := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+		for d := range 7 {
+			day := mon.AddDate(0, 0, d)
+			weekend := d >= 5
+			runs = append(runs,
+				diff.RunPresence{At: day.Add(10 * time.Hour), Covered: true, Seen: !weekend || weekendSeen},
+				diff.RunPresence{At: day.Add(22 * time.Hour), Covered: true, Seen: false})
+		}
+		return runs
+	}
+	t.Run("office hours, never at weekends", func(t *testing.T) {
+		a := diff.ComputeAvailability(week(false), time.UTC)
+
+		assert.Equal(t, diff.PatternOfficeHours, a.Pattern)
+		assert.Equal(t, "Up mostly 07–17 on weekdays, never at weekends.", plainSummary(a))
+	})
+	t.Run("always", func(t *testing.T) {
+		a := diff.ComputeAvailability([]diff.RunPresence{{At: testNow, Covered: true, Seen: true}}, time.UTC)
+
+		assert.Equal(t, "Seen in every scan that covered it.", plainSummary(a))
+	})
+	t.Run("no data", func(t *testing.T) {
+		assert.Equal(t, "", plainSummary(diff.ComputeAvailability(nil, nil)))
+	})
+}
+
+func TestAnnotationUnknownService(t *testing.T) {
+	e, _ := assetEnv(t)
+	c := e.login(t, "Analyst")
+
+	rec := e.post("/assets/"+hostUnstable+"/8080/tcp/annotation", annotationForm(nil), c)
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	rec = e.post("/assets/"+hostUnstable+"/80/tcp/annotation?vhost=other.example", annotationForm(nil), c)
+	assert.Equal(t, http.StatusNotFound, rec.Code, "vhost must match exactly")
+	assert.Equal(t, 0, len(e.st.assets.upserts))
+
+	// A gone service that an earlier run saw can still be annotated.
+	gone := svcKey(hostUnstable, 8080)
+	e.st.assets.history = map[model.AssetKey]store.AssetTimeline{gone: {Runs: []store.AssetRun{{RunID: 3, Seen: true}}}}
+	rec = e.post("/assets/"+hostUnstable+"/8080/tcp/annotation", annotationForm(nil), c)
+	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Equal(t, 1, len(e.st.assets.upserts))
+}
+
+func TestAnnotationCrossOriginRejected(t *testing.T) {
+	e, _ := assetEnv(t)
+	c := e.login(t, "Analyst")
+	req := httptest.NewRequest(http.MethodPost, "/assets/"+hostUnstable+"/annotation",
+		strings.NewReader(annotationForm(nil).Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.AddCookie(c)
+
+	rec := serve(e, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, 0, len(e.st.assets.upserts))
 }

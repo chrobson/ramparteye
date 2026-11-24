@@ -54,6 +54,11 @@ type BandView struct {
 type AvailView struct {
 	HasData    bool
 	Summary    string // "Availability 4/6 · pattern intermittent"
+	Pattern    string
+	Seen       int
+	Total      int
+	Misses     int    // trailing covered runs in which the asset was not seen
+	Plain      string // one-line plain-language summary
 	Runs       []RunCell
 	Heat       []HeatRow
 	HourLabels []string
@@ -104,6 +109,8 @@ type HostPage struct {
 	Services  []ServiceRow
 	Findings  []FindingRow
 	Note      AnnotationForm
+	// InactiveAfter is the number of misses after which a host is marked inactive.
+	InactiveAfter int
 }
 
 func availView(runs []store.AssetRun) AvailView {
@@ -122,6 +129,16 @@ func availView(runs []store.AssetRun) AvailView {
 		v.Runs = append(v.Runs, c)
 	}
 	a := diff.ComputeAvailability(pres, time.UTC)
+	v.Pattern, v.Seen, v.Total, v.Plain = a.Pattern, a.Seen, a.Total, plainSummary(a)
+	for i := len(runs) - 1; i >= 0; i-- {
+		if !runs[i].Covered {
+			continue // says nothing about availability
+		}
+		if runs[i].Seen {
+			break
+		}
+		v.Misses++
+	}
 	v.HasData = a.Total > 0
 	v.Summary = fmt.Sprintf("Availability %d/%d · pattern %s", a.Seen, a.Total, a.Pattern)
 	for h := range 24 {
@@ -146,6 +163,32 @@ func availView(runs []store.AssetRun) AvailView {
 		v.Bands = append(v.Bands, bv)
 	}
 	return v
+}
+
+// plainSummary describes the availability pattern in one sentence. It is
+// deterministic: the same Availability always gives the same text.
+func plainSummary(a diff.Availability) string {
+	switch a.Pattern {
+	case diff.PatternAlways:
+		return "Seen in every scan that covered it."
+	case diff.PatternOfficeHours:
+		end := "rarely outside those hours"
+		weekend := 0
+		for _, d := range []int{5, 6} {
+			for _, c := range a.Week[d] {
+				weekend += c.Seen
+			}
+		}
+		if weekend == 0 {
+			end = "never at weekends"
+		}
+		return "Up mostly 07–17 on weekdays, " + end + "."
+	case diff.PatternIntermittent:
+		return fmt.Sprintf("Seen in %d of %d scans, with no time-of-day pattern.", a.Seen, a.Total)
+	case diff.PatternIrregular:
+		return fmt.Sprintf("Seen in only %d of %d scans.", a.Seen, a.Total)
+	}
+	return ""
 }
 
 func heatCell(day, hour int, c diff.Cell) HeatCell {
@@ -215,7 +258,7 @@ func (s *Server) renderHost(w http.ResponseWriter, r *http.Request, status int, 
 }
 
 func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationForm) (HostPage, error) {
-	p := HostPage{Title: ip.String(), IP: ip.String()}
+	p := HostPage{Title: ip.String(), IP: ip.String(), InactiveAfter: s.d.Cfg.Unstable.InactiveAfterMisses}
 	snap, err := s.loadSnapshot(ctx)
 	if err != nil {
 		return p, err
@@ -325,8 +368,8 @@ func serviceKey(r *http.Request) (model.AssetKey, bool) {
 	}
 	port, ok := parsePort(chi.URLParam(r, "port"))
 	proto := chi.URLParam(r, "proto")
-	vhost := r.URL.Query().Get("vhost")
-	if !ok || !protos[proto] || !validVHost(vhost) {
+	vhost := r.URL.Query().Get("vhost") // matched exactly against stored keys
+	if !ok || !protos[proto] {
 		return model.AssetKey{}, false
 	}
 	return model.AssetKey{IP: ip, Port: port, Proto: proto, VHost: vhost}, true

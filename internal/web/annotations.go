@@ -166,6 +166,14 @@ func (s *Server) annotationSave(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r)
 		return
 	}
+	if known && key.Port != 0 {
+		known, err = s.serviceKnown(r.Context(), key)
+	}
+	if err != nil {
+		s.log.Error("annotation: asset lookup", "err", err)
+		s.serverError(w, r)
+		return
+	}
 	if !known {
 		s.notFound(w, r)
 		return
@@ -216,4 +224,28 @@ func (s *Server) annotationDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	setFlash(w, r, msg)
 	http.Redirect(w, r, assetPath(key), http.StatusSeeOther)
+}
+
+// serviceKnown reports whether key is a service of the latest run or one
+// that a scan saw or changed before.
+func (s *Server) serviceKnown(ctx context.Context, key model.AssetKey) (bool, error) {
+	snap, err := s.loadSnapshot(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, sv := range snap.Services[key.IP] {
+		if sv.Key == key {
+			return true, nil
+		}
+	}
+	h, err := s.d.Store.AssetHistory(ctx, key, availabilityRuns)
+	if err != nil {
+		return false, err
+	}
+	for _, r := range h.Runs {
+		if r.Seen {
+			return true, nil
+		}
+	}
+	return len(h.Changes) > 0, nil
 }
