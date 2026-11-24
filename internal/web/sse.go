@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/store"
 )
@@ -15,8 +17,9 @@ import (
 // SSE stream tuning. The heartbeat keeps proxies from closing an idle
 // stream; the lifetime bounds a connection so an expired session cannot
 // keep listening (the client reconnects and is checked again).
+var sseHeartbeat = 15 * time.Second // variable so tests can shorten it
+
 const (
-	sseHeartbeat   = 15 * time.Second
 	sseLifetime    = 30 * time.Minute
 	sseWriteTimout = 10 * time.Second
 	sseMaxRuns     = 8 // runs kept in the panel of one connection
@@ -43,6 +46,7 @@ func (st *sseState) apply(e runner.Event) {
 		i = len(st.runs) - 1
 	}
 	r := &st.runs[i]
+	r.Finished, r.Status = false, "" // a resumed run is running again
 	r.Percent = max(0, min(100, int(e.Progress*100)))
 	r.PPS = e.PPS
 	r.PPSPct = 0
@@ -79,7 +83,9 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 
 	st := &sseState{budget: s.d.Cfg.MaxRate, names: map[int64]string{}}
 	var runs []store.RunSummary
-	if rs, err := s.d.Store.Runs(r.Context(), runsLookback); err == nil {
+	if rs, err := s.d.Store.Runs(r.Context(), runsLookback); err != nil {
+		s.log.Warn("events: load runs", "err", err)
+	} else {
 		runs = rs
 	}
 	for _, rs := range runs {
@@ -118,13 +124,22 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	defer beat.Stop()
 	life := time.NewTimer(sseLifetime)
 	defer life.Stop()
+	var shutdown <-chan struct{}
+	if s.d.ShutdownCtx != nil {
+		shutdown = s.d.ShutdownCtx.Done()
+	}
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-life.C:
 			return
+		case <-shutdown:
+			return
 		case <-beat.C:
+			if !s.sessionStillAllowed(r) {
+				return
+			}
 			if !send([]byte(": heartbeat\n\n")) {
 				return
 			}
@@ -150,6 +165,25 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// sessionStillAllowed re-checks the session cookie against the store: a
+// logged-out, expired or demoted user stops receiving events. A store error
+// keeps the stream (the next beat checks again).
+func (s *Server) sessionStillAllowed(r *http.Request) bool {
+	c, err := r.Cookie(auth.CookieName)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	su, err := s.d.Store.SessionUserAt(r.Context(), auth.HashToken(c.Value), s.now())
+	if errors.Is(err, store.ErrUserNotFound) {
+		return false
+	}
+	if err != nil {
+		s.log.Warn("events: session check", "err", err)
+		return true
+	}
+	return slices.Contains(su.Perms, string(auth.PermResultsRead)) && !su.MustChangePassword
 }
 
 // liveFragment renders the live panel body.

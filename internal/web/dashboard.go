@@ -34,10 +34,12 @@ const (
 type DashboardData struct {
 	Title string
 
-	HasRuns  bool
-	Headline string
-	Sub      string
-	LastScan string // "Scan #6 finished 12 min ago." ("" when unknown)
+	HasRuns    bool // any run exists
+	HasDoneRun bool // a run has finished, so the counts below mean something
+	Running    bool // a scan is running now
+	Headline   string
+	Sub        string
+	LastScan   string // "Scan #6 finished 12 min ago." ("" when unknown)
 
 	// Changes of the latest finished run against its predecessor.
 	NewHosts, HostsGone, NewServices, ServicesGone, Changed, Unstable int
@@ -84,7 +86,7 @@ type LiveRun struct {
 	Percent  int    // 0-100
 	PPS      int
 	PPSPct   int // PPS against the run budget, 0-100
-	Budget   int // pps limit
+	Budget   int // safety policy limit in packets/s
 	Finished bool
 	Status   string // final status of a finished run
 }
@@ -93,8 +95,13 @@ type LiveRun struct {
 // are left out; the sub line says whether anything needs urgent attention
 // and when the last scan finished.
 func Headline(d DashboardData) (title, sub string) {
-	if !d.HasRuns {
+	switch {
+	case !d.HasRuns:
 		return "No scans yet.", "Create a scan profile and start the first scan; results appear here."
+	case !d.HasDoneRun && d.Running:
+		return "First scan in progress.", "Results appear here when it finishes."
+	case !d.HasDoneRun:
+		return "No finished scans yet.", "Results appear here when a scan finishes."
 	}
 	var parts []string
 	if d.NewServices > 0 {
@@ -169,8 +176,10 @@ func (s *Server) loadDashboard(ctx context.Context) (DashboardData, error) {
 		return d, fmt.Errorf("latest run: %w", err)
 	}
 	d.HasRuns = len(runs) > 0
+	d.Running = len(d.Live) > 0
+	d.HasDoneRun = runID != 0
 	if runID != 0 {
-		if err := s.loadRunPart(ctx, &d, runID, runs); err != nil {
+		if err := s.loadRunPart(ctx, &d, runID); err != nil {
 			return d, err
 		}
 	}
@@ -183,12 +192,14 @@ func (s *Server) loadDashboard(ctx context.Context) (DashboardData, error) {
 	return d, nil
 }
 
-func (s *Server) loadRunPart(ctx context.Context, d *DashboardData, runID int64, runs []store.RunSummary) error {
+func (s *Server) loadRunPart(ctx context.Context, d *DashboardData, runID int64) error {
 	st := s.d.Store
-	for _, r := range runs {
-		if r.ID == runID && r.FinishedAt != nil {
-			d.LastScan = fmt.Sprintf("Scan #%d finished %s.", r.ID, agoFunc(s.now)(*r.FinishedAt))
-		}
+	last, err := st.Run(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("latest run: %w", err)
+	}
+	if last.FinishedAt != nil {
+		d.LastScan = fmt.Sprintf("Scan #%d finished %s.", last.ID, agoFunc(s.now)(*last.FinishedAt))
 	}
 	changes, err := st.Changes(ctx, runID)
 	if err != nil {
@@ -445,7 +456,7 @@ func (s *Server) cancelAll(w http.ResponseWriter, r *http.Request) {
 			msg = "Cancel requested for " + plural(len(ids), "run", "runs") + ": " + strings.Join(refs, ", ") + "."
 		}
 	}
-	setFlash(w, msg)
+	setFlash(w, r, msg)
 	http.Redirect(w, r, backPath(r), http.StatusSeeOther)
 }
 
@@ -468,12 +479,12 @@ const (
 )
 
 // setFlash stores a one-time message for the next page.
-func setFlash(w http.ResponseWriter, msg string) {
+func setFlash(w http.ResponseWriter, r *http.Request, msg string) {
 	if len(msg) > maxFlash {
 		msg = msg[:maxFlash]
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: url.QueryEscape(msg), Path: "/",
-		MaxAge: 60, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		MaxAge: 60, HttpOnly: true, Secure: isTLS(r), SameSite: http.SameSiteLaxMode})
 }
 
 // takeFlash returns and clears the flash message.
@@ -483,10 +494,16 @@ func takeFlash(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		HttpOnly: true, Secure: isTLS(r), SameSite: http.SameSiteLaxMode})
 	msg, err := url.QueryUnescape(c.Value)
 	if err != nil || len(msg) > maxFlash {
 		return ""
 	}
 	return strings.ToValidUTF8(msg, "�")
+}
+
+// isTLS reports whether the client reached us over TLS (directly or via a
+// proxy that says so), as the session cookie logic does.
+func isTLS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

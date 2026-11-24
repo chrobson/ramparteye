@@ -41,6 +41,7 @@ type Store interface {
 
 	// Dashboard.
 	Targets(ctx context.Context, tag string) ([]model.Target, error)
+	Run(ctx context.Context, id int64) (store.RunSummary, error)
 	Runs(ctx context.Context, limit int) ([]store.RunSummary, error)
 	LatestDoneRun(ctx context.Context) (int64, error)
 	Changes(ctx context.Context, runID int64) ([]model.Change, error)
@@ -72,6 +73,9 @@ type Deps struct {
 	Scope  scope.Scope
 	Cfg    config.Config
 	Log    *slog.Logger
+	// ShutdownCtx, when set, ends long-lived SSE streams once it is done,
+	// so a graceful server shutdown does not wait for them.
+	ShutdownCtx context.Context
 }
 
 var (

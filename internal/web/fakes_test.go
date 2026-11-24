@@ -75,6 +75,7 @@ type fakeStore struct {
 type dashData struct {
 	targets  []model.Target
 	runs     []store.RunSummary
+	allRuns  []store.RunSummary // runs Run finds beyond the recent list
 	latest   int64
 	changes  []model.Change
 	hostObs  []model.HostObs
@@ -416,3 +417,17 @@ func (f *fakeStore) AnnotationsByIPs(context.Context, []netip.Addr) (map[model.A
 }
 
 func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }
+
+func (f *fakeStore) Run(_ context.Context, id int64) (store.RunSummary, error) {
+	for _, r := range f.dash.allRuns {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	for _, r := range f.dash.runs {
+		if r.ID == id {
+			return r, nil
+		}
+	}
+	return store.RunSummary{}, store.ErrRunNotFound
+}

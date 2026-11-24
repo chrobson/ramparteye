@@ -19,7 +19,7 @@ import (
 
 func TestHeadline(t *testing.T) {
 	t.Run("changes", func(t *testing.T) {
-		d := DashboardData{HasRuns: true, NewServices: 3, HostsGone: 1, Changed: 2}
+		d := DashboardData{HasRuns: true, HasDoneRun: true, NewServices: 3, HostsGone: 1, Changed: 2}
 
 		title, sub := Headline(d)
 
@@ -27,24 +27,24 @@ func TestHeadline(t *testing.T) {
 		assert.Equal(t, "Nothing needs urgent attention.", sub)
 	})
 	t.Run("zero parts are left out and singular is used", func(t *testing.T) {
-		title, _ := Headline(DashboardData{HasRuns: true, NewServices: 1, Changed: 1})
+		title, _ := Headline(DashboardData{HasRuns: true, HasDoneRun: true, NewServices: 1, Changed: 1})
 
 		assert.Equal(t, "Since the last scan: 1 new exposure, 1 service changed.", title)
 	})
 	t.Run("no changes", func(t *testing.T) {
-		title, _ := Headline(DashboardData{HasRuns: true})
+		title, _ := Headline(DashboardData{HasRuns: true, HasDoneRun: true})
 
 		assert.Equal(t, "No changes since the last scan.", title)
 	})
 	t.Run("urgent services and last scan", func(t *testing.T) {
-		d := DashboardData{HasRuns: true, Urgent: 2, LastScan: "Scan #6 finished 12 min ago."}
+		d := DashboardData{HasRuns: true, HasDoneRun: true, Urgent: 2, LastScan: "Scan #6 finished 12 min ago."}
 
 		_, sub := Headline(d)
 
 		assert.Equal(t, "2 services need attention first. Scan #6 finished 12 min ago.", sub)
 	})
 	t.Run("zero urgent keeps last scan", func(t *testing.T) {
-		_, sub := Headline(DashboardData{HasRuns: true, LastScan: "Scan #6 finished 12 min ago."})
+		_, sub := Headline(DashboardData{HasRuns: true, HasDoneRun: true, LastScan: "Scan #6 finished 12 min ago."})
 
 		assert.Equal(t, "Nothing needs urgent attention. Scan #6 finished 12 min ago.", sub)
 	})
@@ -60,6 +60,59 @@ func TestHeadlineNoRuns(t *testing.T) {
 	body := e.get("/", e.login(t, "Viewer")).Body.String()
 	assert.Contain(t, "No scans yet.", body)
 	assert.Contain(t, `href="/scans"`, body)
+}
+
+func TestHeadlineNoFinishedRun(t *testing.T) {
+	title, sub := Headline(DashboardData{HasRuns: true, Running: true})
+	assert.Equal(t, "First scan in progress.", title)
+	assert.NotContain(t, "Nothing needs urgent attention", sub)
+
+	title, sub = Headline(DashboardData{HasRuns: true})
+	assert.Equal(t, "No finished scans yet.", title)
+	assert.NotContain(t, "Nothing needs urgent attention", sub)
+
+	e := newEnv(t)
+	e.st.dash.runs = []store.RunSummary{{ID: 1, Status: store.RunRunning}}
+	e.runner.active = []int64{1}
+	body := e.get("/", e.login(t, "Viewer")).Body.String()
+	assert.Contain(t, "First scan in progress.", body)
+	assert.NotContain(t, "new hosts", body)
+	assert.NotContain(t, "Nothing needs urgent attention", body)
+	assert.NotContain(t, "Go to Scans", body)
+}
+
+func TestDashboardLastScanOutsideRecentRuns(t *testing.T) {
+	e, c := dashEnv(t)
+	fin := testNow.Add(-3 * time.Hour)
+	e.st.dash.allRuns = []store.RunSummary{{ID: 6, Status: store.RunDone, FinishedAt: &fin}}
+	e.st.dash.runs = []store.RunSummary{{ID: 20, Status: store.RunFailed}}
+
+	body := e.get("/", c).Body.String()
+
+	assert.Contain(t, "Scan #6 finished 3 h ago.", body)
+	assert.Contain(t, "Open findings", body)
+}
+
+func TestFlashCookieSecureOnTLS(t *testing.T) {
+	e := newEnv(t)
+	c := e.login(t, "Operator")
+	req := httptest.NewRequest(http.MethodPost, "/scans/cancel-all", nil)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.AddCookie(c)
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+
+	var flash *http.Cookie
+	for _, fc := range rec.Result().Cookies() {
+		if fc.Name == flashCookie {
+			flash = fc
+		}
+	}
+	assert.NotNil(t, flash)
+	assert.True(t, flash.Secure)
+	assert.True(t, flash.HttpOnly)
+	assert.Equal(t, http.SameSiteLaxMode, flash.SameSite)
 }
 
 func dashEnv(t *testing.T) (*testEnv, *http.Cookie) {
@@ -192,7 +245,7 @@ func TestCancelAllEndpointRequiresPerm(t *testing.T) {
 
 		for ref, want := range map[string]string{
 			"http://other.test/scans?x=1": "/",
-			"https://evil.test/x":          "/",
+			"https://evil.test/x":         "/",
 		} {
 			req := httptest.NewRequest(http.MethodPost, "/scans/cancel-all", nil)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -325,6 +378,77 @@ func TestSSEStateBounded(t *testing.T) {
 
 	assert.Len(t, sseMaxRuns, st.runs)
 	assert.Equal(t, 100, st.runs[0].PPSPct)
+}
+
+func TestSSEStopsAfterLogout(t *testing.T) {
+	old := sseHeartbeat
+	sseHeartbeat = 20 * time.Millisecond
+	defer func() { sseHeartbeat = old }()
+	e := sseEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := sseClient(t, e, ctx, "Viewer")
+	readMessage(t, r)
+
+	e.st.mu.Lock()
+	e.st.sessions = map[string]fakeSession{}
+	e.st.mu.Unlock()
+
+	select {
+	case <-e.runner.unsub:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream kept running after the session ended")
+	}
+}
+
+func TestSSEStopsAfterPermissionLoss(t *testing.T) {
+	old := sseHeartbeat
+	sseHeartbeat = 20 * time.Millisecond
+	defer func() { sseHeartbeat = old }()
+	e := sseEnv(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := sseClient(t, e, ctx, "Viewer")
+	readMessage(t, r)
+
+	e.st.mu.Lock()
+	e.st.users[1].Perms = nil
+	e.st.mu.Unlock()
+
+	select {
+	case <-e.runner.unsub:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream kept running after the permission was lost")
+	}
+}
+
+func TestSSEStopsOnShutdown(t *testing.T) {
+	shutdown, stop := context.WithCancel(context.Background())
+	e := newEnv(t, func(d *Deps) { d.ShutdownCtx = shutdown })
+	e.runner.events = make(chan runner.Event, 1)
+	e.runner.unsub = make(chan struct{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r := sseClient(t, e, ctx, "Viewer")
+	readMessage(t, r)
+
+	stop()
+
+	select {
+	case <-e.runner.unsub:
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream kept running after shutdown")
+	}
+}
+
+func TestSSEResumedRunIsRunningAgain(t *testing.T) {
+	st := &sseState{}
+	st.apply(runner.Event{RunID: 1, Kind: runner.EventFinished, Message: store.RunPaused})
+
+	st.apply(runner.Event{RunID: 1, Kind: runner.EventStarted})
+
+	assert.False(t, st.runs[0].Finished)
+	assert.Equal(t, "", st.runs[0].Status)
 }
 
 func TestSSEMessageFraming(t *testing.T) {

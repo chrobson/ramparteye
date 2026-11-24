@@ -4,9 +4,9 @@
 <div>
 <h1 class="text-[17px] font-semibold leading-snug">{{$d.Headline}}</h1>
 <p class="mt-1 text-muted">
-{{- if not $d.HasRuns}}{{$d.Sub}} <a class="text-brand-fg underline" href="/scans">Go to Scans</a>
+{{- if not $d.HasDoneRun}}{{$d.Sub}}{{if not $d.HasRuns}} <a class="text-brand-fg underline" href="/scans">Go to Scans</a>{{end}}
 {{- else}}{{if eq $d.Urgent 0}}<span class="text-ok" aria-hidden="true">✓</span> {{end}}{{$d.Sub}}{{end}}</p>
-{{if $d.HasRuns}}<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+{{if $d.HasDoneRun}}<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
 <span class="text-ok">+ <b>{{$d.NewHosts}}</b> new hosts</span>
 <span class="text-ok">+ <b>{{$d.NewServices}}</b> new services</span>
 <span class="text-bad">− <b>{{$d.HostsGone}}</b> host{{if ne $d.HostsGone 1}}s{{end}} gone</span>
@@ -19,21 +19,20 @@
 {{template "kv" (dict "K" "Active hosts" "V" (num $d.ActiveHosts))}}
 {{template "kv" (dict "K" "Open services" "V" (num $d.OpenServices))}}
 {{template "kv" (dict "K" "Web services" "V" (num $d.WebServices))}}
-{{template "kv" (dict "K" "Findings" "V" (num $d.Findings))}}
+{{template "kv" (dict "K" "Open findings" "V" (num $d.Findings))}}
 {{template "kv" (dict "K" "Admin panels" "V" (num $d.AdminPanels))}}
 </dl>
 </div>
 
 <section class="panel mt-4" aria-label="Live scans">
 {{template "panel-title" "Live scans"}}
-{{if can .Ctx "results.read"}}<div id="live-scans" hx-ext="sse" sse-connect="/events" sse-swap="live" aria-live="polite">{{template "live-runs" $d.Live}}</div>
-{{else}}{{template "live-runs" $d.Live}}{{end}}
+<div id="live-scans" hx-ext="sse" sse-connect="/events" sse-swap="live" aria-live="polite">{{template "live-runs" $d.Live}}</div>
 </section>
 
 <div class="mt-4 grid gap-3 lg:grid-cols-3">
 <section class="panel">
 {{template "panel-title" "Review first"}}
-{{range $d.Review}}{{template "service-item" .}}{{else}}<p class="text-muted">Nothing needs urgent attention.</p>{{end}}
+{{range $d.Review}}{{template "service-item" .}}{{else}}<p class="text-muted">{{if $d.HasDoneRun}}Nothing needs urgent attention.{{else}}Nothing to review yet.{{end}}</p>{{end}}
 </section>
 <section class="panel">
 {{template "panel-title" "Latest changes"}}
@@ -69,7 +68,7 @@
 <div class="grid gap-4 sm:grid-cols-2">
 <div><b class="text-sm">{{.Percent}}%</b> complete
 <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.Percent}}"><i class="bg-brand" style="width: {{.Percent}}%"></i></div></div>
-<div><b class="text-sm">{{num .PPS}}</b> pps{{if .Budget}} · run limit {{num .Budget}}{{end}}
+<div><b class="text-sm">{{num .PPS}}</b> pps{{if .Budget}} · safety policy limit {{num .Budget}}{{end}}
 <div class="bar"><i class="bg-muted" style="width: {{.PPSPct}}%"></i></div></div>
 </div></div>
 {{else}}<p class="text-muted">No scan is running.</p>{{end}}{{end}}
