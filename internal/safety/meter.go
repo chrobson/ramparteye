@@ -28,9 +28,10 @@ import (
 // receipt (the hash covers all of them).
 const SampleArgv = 4
 
-// MinPeakElapsed is the shortest nmap invocation used for the per-invocation
-// peak rate: --max-rate is an average, so a 10 ms run sending 5 packets says
-// nothing about the cap.
+// MinPeakElapsed is the smallest denominator of the per-invocation peak
+// rate: --max-rate is an average, so a 10 ms run sending 5 packets says
+// nothing about the cap. Shorter runs are divided by this instead of being
+// dropped, so a burst cannot hide.
 const MinPeakElapsed = time.Second
 
 // Invocation is one nmap execution as measured by the scanner. Its fields
@@ -60,11 +61,9 @@ type Snapshot struct {
 	Methods      map[string]int // requests per HTTP method
 }
 
-// Meter accumulates the measurements of one run. It is safe for concurrent
-// use by workers and HTTP probes.
-type Meter struct {
-	mu sync.Mutex
-
+// acc holds what is reported by one Drain: everything measured since the
+// previous Drain.
+type acc struct {
 	invocations int
 	rawReported int
 	packets     int64
@@ -77,16 +76,42 @@ type Meter struct {
 
 	methods  map[string]int
 	httpAuth int64
-	window   []time.Time // request times of the last second
 	peakRPS  int
 
-	budget       Budget
-	probes       map[netip.Addr]int
-	probesRefuse int64
+	probes    map[netip.Addr]int
+	refused   int64
+	gateCalls int64
+	outside   int64
+}
 
-	tw      Window
-	hasTW   bool
-	outside int64
+func newAcc() acc {
+	return acc{argvHash: sha256.New(), methods: map[string]int{}, probes: map[netip.Addr]int{}}
+}
+
+// Meter accumulates the measurements of one run. It is safe for concurrent
+// use by workers and HTTP probes.
+//
+// Receipt peeks at the measurements since the last Drain; Drain returns them
+// and starts over, so saving Drain output twice never counts anything twice.
+// Snapshot is cumulative and unaffected by Drain.
+type Meter struct {
+	mu sync.Mutex
+
+	cur acc
+
+	// Cumulative state for Snapshot.
+	totPackets int64
+	totBusy    []span
+	totMethods map[string]int
+
+	window []time.Time // request times of the last second, kept across Drain
+
+	budget   Budget
+	base     map[netip.Addr]int // probes per host already drained or seeded
+	pathSigs int
+
+	tw    Window
+	hasTW bool
 
 	now func() time.Time
 }
@@ -96,10 +121,10 @@ type span struct{ a, b time.Time }
 // NewMeter returns an empty meter without budget or time window.
 func NewMeter() *Meter {
 	return &Meter{
-		argvHash: sha256.New(),
-		methods:  map[string]int{},
-		probes:   map[netip.Addr]int{},
-		now:      time.Now,
+		cur:        newAcc(),
+		totMethods: map[string]int{},
+		base:       map[netip.Addr]int{},
+		now:        time.Now,
 	}
 }
 
@@ -142,6 +167,32 @@ func (m *Meter) SetWindow(w Window) {
 	m.mu.Unlock()
 }
 
+// SeedProbes loads the per-host path probe counts a resumed run already
+// spent (see LoadProbes), so the budget holds across resumes. Seeded counts
+// are not part of the next Drain.
+func (m *Meter) SeedProbes(counts map[netip.Addr]int) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	for h, n := range counts {
+		m.base[h.Unmap()] += n
+	}
+	m.mu.Unlock()
+}
+
+// SetPathSignatures records how many enabled signatures send path probes.
+// If there are some and ProbeGate was never consulted, the "path probe
+// budget" check is unmeasured rather than passed.
+func (m *Meter) SetPathSignatures(n int) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	m.pathSigs = n
+	m.mu.Unlock()
+}
+
 // AddNmap records one nmap invocation.
 func (m *Meter) AddNmap(inv Invocation) {
 	if m == nil {
@@ -149,30 +200,31 @@ func (m *Meter) AddNmap(inv Invocation) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.invocations++
+	c := &m.cur
+	c.invocations++
 	if inv.Raw {
-		m.rawReported++
+		c.rawReported++
 	}
-	m.packets += inv.Packets
-	m.elapsed += inv.Elapsed
+	c.packets += inv.Packets
+	m.totPackets += inv.Packets
+	c.elapsed += inv.Elapsed
 	if inv.End.After(inv.Start) {
-		m.busy = mergeSpan(m.busy, span{inv.Start, inv.End})
+		c.busy = mergeSpan(c.busy, span{inv.Start, inv.End})
+		m.totBusy = mergeSpan(m.totBusy, span{inv.Start, inv.End})
 	}
-	if inv.Elapsed >= MinPeakElapsed {
-		if pps := float64(inv.Packets) / inv.Elapsed.Seconds(); pps > m.peakInvPPS {
-			m.peakInvPPS = pps
-		}
+	if pps := float64(inv.Packets) / max(inv.Elapsed, MinPeakElapsed).Seconds(); pps > c.peakInvPPS {
+		c.peakInvPPS = pps
 	}
 	if m.hasTW && !inv.Start.IsZero() && (!m.tw.Contains(inv.Start) || !m.tw.Contains(inv.End)) {
-		m.outside++
+		c.outside++
 	}
 	line := strings.Join(inv.Argv, " ")
-	m.argvHash.Write([]byte(line))
-	m.argvHash.Write([]byte{'\n'})
-	if len(m.argvSample) < SampleArgv {
-		m.argvSample = append(m.argvSample, line)
+	c.argvHash.Write([]byte(line))
+	c.argvHash.Write([]byte{'\n'})
+	if len(c.argvSample) < SampleArgv {
+		c.argvSample = append(c.argvSample, line)
 	}
-	m.targets = append(m.targets, inv.Targets...)
+	c.targets = append(c.targets, inv.Targets...)
 }
 
 // mergeSpan inserts s into a sorted list of disjoint spans.
@@ -215,13 +267,14 @@ func (m *Meter) CountHTTP(req *http.Request) {
 	if method == "" {
 		method = http.MethodGet
 	}
-	m.methods[method]++
+	m.cur.methods[method]++
+	m.totMethods[method]++
 	if carriesAuth(req.Header) {
-		m.httpAuth++
+		m.cur.httpAuth++
 	}
 	now := m.now()
 	if m.hasTW && !m.tw.Contains(now) {
-		m.outside++
+		m.cur.outside++
 	}
 	cut := now.Add(-time.Second)
 	i := 0
@@ -229,8 +282,8 @@ func (m *Meter) CountHTTP(req *http.Request) {
 		i++
 	}
 	m.window = append(m.window[i:], now)
-	if len(m.window) > m.peakRPS {
-		m.peakRPS = len(m.window)
+	if len(m.window) > m.cur.peakRPS {
+		m.cur.peakRPS = len(m.window)
 	}
 }
 
@@ -250,11 +303,12 @@ func (m *Meter) ProbeGate(host netip.Addr) bool {
 	host = host.Unmap()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if limit := m.budget.PathProbesPerHost; limit > 0 && m.probes[host] >= limit {
-		m.probesRefuse++
+	m.cur.gateCalls++
+	if limit := m.budget.PathProbesPerHost; limit > 0 && m.base[host]+m.cur.probes[host] >= limit {
+		m.cur.refused++
 		return false
 	}
-	m.probes[host]++
+	m.cur.probes[host]++
 	return true
 }
 
@@ -265,15 +319,15 @@ func (m *Meter) Snapshot() Snapshot {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s := Snapshot{Packets: m.packets, Methods: make(map[string]int, len(m.methods))}
+	s := Snapshot{Packets: m.totPackets, Methods: make(map[string]int, len(m.totMethods))}
 	var total int64
-	for k, v := range m.methods {
+	for k, v := range m.totMethods {
 		s.Methods[k] = v
 		total += int64(v)
 	}
 	s.HTTPRequests = total
-	if busy := busyTime(m.busy); busy > 0 {
-		s.PPS = float64(m.packets) / busy.Seconds()
+	if busy := busyTime(m.totBusy); busy > 0 {
+		s.PPS = float64(m.totPackets) / busy.Seconds()
 	}
 	return s
 }
@@ -303,9 +357,8 @@ func (t countingTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 }
 
 // Allowlist is the part of scope.Scope the receipt needs; scope.Scope
-// satisfies it.
+// satisfies it. CheckPrefix returns nil only for a prefix fully in scope.
 type Allowlist interface {
-	Allows(netip.Addr) bool
 	CheckPrefix(netip.Prefix) error
 }
 
@@ -342,42 +395,83 @@ type Receipt struct {
 	PathProbeBudget   int   `json:"path_probe_budget"`
 	PathProbes        int64 `json:"path_probes"`
 	PathProbesRefused int64 `json:"path_probes_refused"`
-	PathProbesMaxHost int   `json:"path_probes_max_host"`
+	PathProbesMaxHost int   `json:"path_probes_max_host"` // busiest host, accumulated over resumes
+	// PathProbeSignatures is how many enabled signatures send path probes;
+	// PathProbeGateCalls how often the gate was consulted.
+	PathProbeSignatures int   `json:"path_probe_signatures"`
+	PathProbeGateCalls  int64 `json:"path_probe_gate_calls"`
+	// ProbeHosts is the per-host probe count of this Drain; Save adds it to
+	// the stored counts. Not part of the JSON report.
+	ProbeHosts map[string]int `json:"-"`
 
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// EffectivePPS is the run's average nmap rate: packets over the time at
-// least one nmap process was running.
-func (r Receipt) EffectivePPS() float64 {
-	if r.NmapBusyMs <= 0 {
-		return 0
+// rateSeconds is the time the packets were sent over: nmap busy time, or
+// the summed elapsed time when no start/end was recorded; 0 when neither is
+// known.
+func (r Receipt) rateSeconds() float64 {
+	if r.NmapBusyMs > 0 {
+		return float64(r.NmapBusyMs) / 1000
 	}
-	return float64(r.NmapPackets) / (float64(r.NmapBusyMs) / 1000)
+	return float64(r.NmapElapsedMs) / 1000
 }
 
-// Receipt builds the receipt of the run so far; allow re-checks every target
-// operand passed to nmap (nil skips the check). The caller fills RunID and
-// the runner-owned limits (PerWorkerRate, HTTPRateLimit, HTTPBurst).
+// EffectivePPS is the run's average nmap rate: packets over the time at
+// least one nmap process was running. It is 0 when that time is unknown.
+func (r Receipt) EffectivePPS() float64 {
+	secs := r.rateSeconds()
+	if secs <= 0 {
+		return 0
+	}
+	return float64(r.NmapPackets) / secs
+}
+
+// Receipt returns the measurements since the last Drain without resetting
+// them; allow re-checks every target operand passed to nmap (nil skips the
+// check, which then reports "unmeasured"). The caller fills RunID and the
+// runner-owned limits (PerWorkerRate, HTTPRateLimit, HTTPBurst).
 func (m *Meter) Receipt(allow Allowlist) Receipt {
-	var r Receipt
 	if m == nil {
-		return r
+		return Receipt{}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	r.NmapInvocations = m.invocations
-	r.NmapRawReported = m.rawReported
-	r.NmapPackets = m.packets
-	r.NmapElapsedMs = m.elapsed.Milliseconds()
-	r.NmapBusyMs = busyTime(m.busy).Milliseconds()
-	r.NmapPeakInvPPS = m.peakInvPPS
-	r.ConfiguredMaxRate, r.PolicyPPS = m.budget.RunPPS, m.budget.PolicyPPS
-	if m.invocations > 0 {
-		r.ArgvSHA256 = hex.EncodeToString(m.argvHash.Sum(nil))
+	return m.receiptLocked(allow)
+}
+
+// Drain returns the measurements since the previous Drain and resets them,
+// so the result can be added to the stored receipt exactly once. Always call
+// Save with Drain output, never with a repeated Receipt.
+func (m *Meter) Drain(allow Allowlist) Receipt {
+	if m == nil {
+		return Receipt{}
 	}
-	r.ArgvSample = append([]string(nil), m.argvSample...)
-	for method, n := range m.methods {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.receiptLocked(allow)
+	for h, n := range m.cur.probes {
+		m.base[h] += n
+	}
+	m.cur = newAcc()
+	return r
+}
+
+func (m *Meter) receiptLocked(allow Allowlist) Receipt {
+	var r Receipt
+	c := &m.cur
+	r.NmapInvocations = c.invocations
+	r.NmapRawReported = c.rawReported
+	r.NmapPackets = c.packets
+	r.NmapElapsedMs = c.elapsed.Milliseconds()
+	r.NmapBusyMs = busyTime(c.busy).Milliseconds()
+	r.NmapPeakInvPPS = c.peakInvPPS
+	r.ConfiguredMaxRate, r.PolicyPPS = m.budget.RunPPS, m.budget.PolicyPPS
+	if c.invocations > 0 {
+		r.ArgvSHA256 = hex.EncodeToString(c.argvHash.Sum(nil))
+	}
+	r.ArgvSample = append([]string(nil), c.argvSample...)
+	for method, n := range c.methods {
 		switch method {
 		case http.MethodGet:
 			r.HTTPGet += int64(n)
@@ -387,10 +481,10 @@ func (m *Meter) Receipt(allow Allowlist) Receipt {
 			r.HTTPOther += int64(n)
 		}
 	}
-	r.HTTPAuth = m.httpAuth
-	r.HTTPPeakRPS = float64(m.peakRPS)
+	r.HTTPAuth = c.httpAuth
+	r.HTTPPeakRPS = float64(c.peakRPS)
 	if allow != nil {
-		for _, p := range m.targets {
+		for _, p := range c.targets {
 			n := addrCount(p)
 			r.TargetsChecked += n
 			if allow.CheckPrefix(p) != nil {
@@ -401,12 +495,23 @@ func (m *Meter) Receipt(allow Allowlist) Receipt {
 	if m.hasTW {
 		r.TimeWindow = m.tw.String()
 	}
-	r.OutsideWindow = m.outside
+	r.OutsideWindow = c.outside
 	r.PathProbeBudget = max(m.budget.PathProbesPerHost, 0)
-	r.PathProbesRefused = m.probesRefuse
-	for _, n := range m.probes {
+	r.PathProbesRefused = c.refused
+	r.PathProbeSignatures = m.pathSigs
+	r.PathProbeGateCalls = c.gateCalls
+	if len(c.probes) > 0 {
+		r.ProbeHosts = make(map[string]int, len(c.probes))
+	}
+	for h, n := range c.probes {
 		r.PathProbes += int64(n)
-		r.PathProbesMaxHost = max(r.PathProbesMaxHost, n)
+		r.ProbeHosts[h.String()] = n
+	}
+	for h, n := range m.base {
+		r.PathProbesMaxHost = max(r.PathProbesMaxHost, n+c.probes[h])
+	}
+	for h, n := range c.probes {
+		r.PathProbesMaxHost = max(r.PathProbesMaxHost, m.base[h]+n)
 	}
 	return r
 }

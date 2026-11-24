@@ -18,7 +18,6 @@ import (
 
 type allowPrefix struct{ p netip.Prefix }
 
-func (a allowPrefix) Allows(ip netip.Addr) bool { return a.p.Contains(ip) }
 func (a allowPrefix) CheckPrefix(q netip.Prefix) error {
 	if a.p.Bits() <= q.Bits() && a.p.Contains(q.Addr()) {
 		return nil
@@ -113,6 +112,7 @@ func TestNmapAggregationAndChecks(t *testing.T) {
 	names := make([]string, 0, 5)
 	for _, c := range rep.Checks {
 		names = append(names, c.Name)
+		assert.Equal(t, StatusPass, c.Status)
 		assert.True(t, c.OK)
 		assert.NotEmpty(t, c.Measured)
 	}
@@ -312,4 +312,170 @@ func TestInvocationFromScanRun(t *testing.T) {
 	r := m.Receipt(allowPrefix{pfx("10.0.0.0/8")})
 	assert.Equal(t, int64(9), r.NmapPackets)
 	assert.Equal(t, int64(4), r.TargetsChecked)
+}
+
+func TestRateUnmeasuredWithoutRunTime(t *testing.T) {
+	r := Receipt{NmapPackets: 500, ConfiguredMaxRate: 1000}
+
+	rep := BuildReport(r)
+
+	got := checkByName(t, rep, "rate within budget")
+	assert.Equal(t, StatusUnmeasured, got.Status)
+	assert.False(t, got.OK)
+	assert.False(t, rep.OK)
+}
+
+func TestRateFallsBackToElapsed(t *testing.T) {
+	r := Receipt{NmapPackets: 3000, NmapElapsedMs: 2000, ConfiguredMaxRate: 1000}
+	got := checkByName(t, BuildReport(r), "rate within budget")
+	assert.Equal(t, StatusFail, got.Status)
+
+	r.ConfiguredMaxRate = 2000
+	assert.Equal(t, StatusPass, checkByName(t, BuildReport(r), "rate within budget").Status)
+}
+
+func TestRateNothingSentPasses(t *testing.T) {
+	got := checkByName(t, BuildReport(Receipt{}), "rate within budget")
+	assert.Equal(t, StatusPass, got.Status)
+}
+
+func TestPeakInvocationAgainstBudget(t *testing.T) {
+	m := NewMeter()
+	t0 := time.Unix(0, 0)
+	// A 100 ms burst of 2000 packets: dropped by the old 1 s minimum, now
+	// divided by 1 s. The average over a long busy span stays low.
+	m.AddNmap(Invocation{Argv: []string{"a"}, Packets: 2000, Elapsed: 100 * time.Millisecond,
+		Start: t0, End: t0.Add(time.Minute)})
+	m.SetBudget(Budget{RunPPS: 1000})
+
+	r := m.Receipt(nil)
+
+	assert.Equal(t, 2000.0, r.NmapPeakInvPPS)
+	assert.True(t, r.EffectivePPS() < 1000)
+	assert.Equal(t, StatusFail, checkByName(t, BuildReport(r), "rate within budget").Status)
+
+	m.SetBudget(Budget{PolicyPPS: 1500})
+	assert.Equal(t, StatusFail, checkByName(t, BuildReport(m.Receipt(nil)), "rate within budget").Status)
+	m.SetBudget(Budget{RunPPS: 2000, PolicyPPS: 5000})
+	assert.Equal(t, StatusPass, checkByName(t, BuildReport(m.Receipt(nil)), "rate within budget").Status)
+}
+
+func TestScopeUnmeasuredWithoutTargets(t *testing.T) {
+	m := NewMeter()
+	m.AddNmap(Invocation{Argv: []string{"x"}, Packets: 1, Start: time.Unix(0, 0), End: time.Unix(1, 0)})
+
+	for _, allow := range []Allowlist{nil, allowPrefix{pfx("10.0.0.0/8")}} {
+		got := checkByName(t, BuildReport(m.Receipt(allow)), "scope respected")
+		assert.Equal(t, StatusUnmeasured, got.Status)
+	}
+	// Nothing scanned, nothing to re-check.
+	assert.Equal(t, StatusPass, checkByName(t, BuildReport(NewMeter().Receipt(nil)), "scope respected").Status)
+}
+
+func TestPathProbeGateNeverConsulted(t *testing.T) {
+	m := NewMeter()
+	m.SetBudget(Budget{PathProbesPerHost: 2})
+	m.SetPathSignatures(3)
+
+	got := checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget")
+	assert.Equal(t, StatusUnmeasured, got.Status)
+
+	m.ProbeGate(netip.MustParseAddr("10.0.0.1"))
+	assert.Equal(t, StatusPass, checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget").Status)
+
+	// No path-probe signatures at all: nothing to measure, pass.
+	assert.Equal(t, StatusPass, checkByName(t, BuildReport(NewMeter().Receipt(nil)), "path probe budget").Status)
+}
+
+func TestDrainReturnsDeltaOnce(t *testing.T) {
+	m := NewMeter()
+	t0 := time.Unix(0, 0)
+	req := must.Value(http.NewRequest("GET", "http://x/", nil))
+	m.AddNmap(Invocation{Argv: []string{"a"}, Packets: 100, Elapsed: 2 * time.Second,
+		Start: t0, End: t0.Add(2 * time.Second), Targets: []netip.Prefix{pfx("10.0.0.1/32")}})
+	m.CountHTTP(req)
+
+	first := m.Drain(allowPrefix{pfx("10.0.0.0/8")})
+	second := m.Drain(allowPrefix{pfx("10.0.0.0/8")})
+
+	assert.Equal(t, int64(100), first.NmapPackets)
+	assert.Equal(t, int64(1), first.HTTPGet)
+	assert.Equal(t, int64(1), first.TargetsChecked)
+	assert.Equal(t, 1, first.NmapInvocations)
+	assert.Equal(t, int64(0), second.NmapPackets)
+	assert.Equal(t, int64(0), second.HTTPGet)
+	assert.Equal(t, int64(0), second.TargetsChecked)
+	assert.Equal(t, 0, second.NmapInvocations)
+	assert.Equal(t, "", second.ArgvSHA256)
+
+	// The live view stays cumulative.
+	m.AddNmap(Invocation{Argv: []string{"b"}, Packets: 50, Start: t0.Add(10 * time.Second), End: t0.Add(11 * time.Second)})
+	s := m.Snapshot()
+	assert.Equal(t, int64(150), s.Packets)
+	assert.Equal(t, 1, s.Methods["GET"])
+	assert.Equal(t, int64(50), m.Drain(nil).NmapPackets)
+}
+
+func TestDrainKeepsProbeBudget(t *testing.T) {
+	m := NewMeter()
+	m.SetBudget(Budget{PathProbesPerHost: 2})
+	a := netip.MustParseAddr("10.0.0.1")
+	assert.True(t, m.ProbeGate(a))
+	first := m.Drain(nil)
+	assert.True(t, m.ProbeGate(a))
+	assert.False(t, m.ProbeGate(a)) // the first probe still counts after Drain
+	second := m.Drain(nil)
+
+	assert.Equal(t, map[string]int{"10.0.0.1": 1}, first.ProbeHosts)
+	assert.Equal(t, map[string]int{"10.0.0.1": 1}, second.ProbeHosts)
+	assert.Equal(t, 2, second.PathProbesMaxHost) // accumulated, not the delta
+	assert.Equal(t, int64(1), second.PathProbesRefused)
+}
+
+func TestSeedProbesHoldsBudgetAcrossResume(t *testing.T) {
+	m := NewMeter()
+	m.SetBudget(Budget{PathProbesPerHost: 2})
+	a, b := netip.MustParseAddr("10.0.0.1"), netip.MustParseAddr("10.0.0.2")
+	m.SeedProbes(map[netip.Addr]int{a: 2, b: 1})
+
+	assert.False(t, m.ProbeGate(a))
+	assert.True(t, m.ProbeGate(b))
+	assert.False(t, m.ProbeGate(b))
+	d := m.Drain(nil)
+	assert.Equal(t, map[string]int{"10.0.0.2": 1}, d.ProbeHosts) // seeded counts are not re-saved
+	assert.Equal(t, 2, d.PathProbesMaxHost)
+}
+
+type failingTransport struct{}
+
+func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("connection refused")
+}
+
+func TestTransportCountsFailedRequest(t *testing.T) {
+	m := NewMeter()
+	c := &http.Client{Transport: Transport(failingTransport{})}
+	req := must.Value(http.NewRequestWithContext(WithMeter(context.Background(), m), "GET", "http://x.invalid/", nil))
+
+	_, err := c.Do(req) //nolint:bodyclose
+	assert.Error(t, err)
+
+	assert.Equal(t, int64(1), m.Receipt(nil).HTTPGet)
+}
+
+func TestTransportCountsRedirectHop(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.Redirect(w, r, "/next", http.StatusFound)
+		}
+	}))
+	defer srv.Close()
+	m := NewMeter()
+	c := &http.Client{Transport: Transport(nil)}
+	req := must.Value(http.NewRequestWithContext(WithMeter(context.Background(), m), "GET", srv.URL, nil))
+
+	resp := must.Value(c.Do(req))
+	_ = resp.Body.Close()
+
+	assert.Equal(t, int64(2), m.Receipt(nil).HTTPGet) // the 302 and the hop it led to
 }
