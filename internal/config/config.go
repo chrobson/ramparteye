@@ -59,6 +59,9 @@ type Config struct {
 	DojoProductType string // RAMPART_DOJO_PRODUCT_TYPE, default "RampartEye"
 	DojoProduct     string // RAMPART_DOJO_PRODUCT
 	DojoEngagement  string // RAMPART_DOJO_ENGAGEMENT, default "Continuous discovery"
+
+	DojoAutoPush     bool // RAMPART_DOJO_AUTO_PUSH, default true
+	DojoCloseMissing bool // RAMPART_DOJO_CLOSE_MISSING, default false
 }
 
 // UnstableConfig defines host instability across runs.
@@ -95,10 +98,10 @@ func Load(env func(string) string) (Config, error) {
 		}
 		return n, nil
 	}
-	flag := func(k string) (bool, error) {
+	flagDef := func(k string, def bool) (bool, error) {
 		v := env(k)
 		if v == "" {
-			return false, nil
+			return def, nil
 		}
 		b, err := strconv.ParseBool(v)
 		if err != nil {
@@ -106,6 +109,7 @@ func Load(env func(string) string) (Config, error) {
 		}
 		return b, nil
 	}
+	flag := func(k string) (bool, error) { return flagDef(k, false) }
 	dur := func(k, def string) (time.Duration, error) {
 		d, err := time.ParseDuration(str(k, def))
 		if err != nil {
@@ -155,6 +159,12 @@ func Load(env func(string) string) (Config, error) {
 		return c, err
 	}
 	if c.Demo, err = flag("RAMPART_DEMO"); err != nil {
+		return c, err
+	}
+	if c.DojoAutoPush, err = flagDef("RAMPART_DOJO_AUTO_PUSH", true); err != nil {
+		return c, err
+	}
+	if c.DojoCloseMissing, err = flag("RAMPART_DOJO_CLOSE_MISSING"); err != nil {
 		return c, err
 	}
 	if c.Unstable.InactiveAfterMisses, err = num("RAMPART_INACTIVE_AFTER_MISSES", 3); err != nil {

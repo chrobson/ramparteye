@@ -230,3 +230,21 @@ func TestParseAddrsDropsZone(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("fe80::1")}, got)
 }
+
+func TestLoadDojoFlags(t *testing.T) {
+	def, err := Load(envMap(nil))
+	assert.NoError(t, err)
+	assert.True(t, def.DojoAutoPush)
+	assert.False(t, def.DojoCloseMissing)
+
+	cfg, err := Load(envMap(map[string]string{
+		"RAMPART_DOJO_AUTO_PUSH":     "false",
+		"RAMPART_DOJO_CLOSE_MISSING": "true",
+	}))
+	assert.NoError(t, err)
+	assert.False(t, cfg.DojoAutoPush)
+	assert.True(t, cfg.DojoCloseMissing)
+
+	_, err = Load(envMap(map[string]string{"RAMPART_DOJO_AUTO_PUSH": "maybe"}))
+	assert.ErrorContain(t, "RAMPART_DOJO_AUTO_PUSH", err)
+}
