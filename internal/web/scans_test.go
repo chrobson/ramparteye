@@ -166,6 +166,16 @@ func TestRunPushButtonByPermission(t *testing.T) {
 	assert.NotContain(t, "Push to DefectDojo now", e.get("/scans/6", e.login(t, auth.RoleViewer)).Body.String())
 }
 
+func TestRunPushButtonHiddenForStaleRun(t *testing.T) {
+	e := scansEnv(t)
+	e.st.admin.lastPush = store.DojoLastPush{RunID: ptr(int64(9))}
+
+	body := e.get("/scans/6", e.login(t, auth.RoleAnalyst)).Body.String()
+
+	assert.NotContain(t, "Push to DefectDojo now", body)
+	assert.Contain(t, "Download CSV", body)
+}
+
 func TestRunPushNow(t *testing.T) {
 	e := scansEnv(t)
 	e.withPushResult(dojo.PushRecord{RunID: 6, OK: true, Findings: 12, Added: 3, Closed: 1}, nil)

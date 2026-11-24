@@ -707,13 +707,18 @@ func TestStaleManualPushRefused(t *testing.T) {
 
 		assert.ErrorIs(t, ErrStaleRun, err)
 		assert.False(t, rec.OK)
-		assert.False(t, rec.Skipped)
+		assert.True(t, rec.Skipped)
 	}
 	assert.Len(t, 1, fake.seenTitles())
 	pushes := st.history()
 	assert.Len(t, 3, pushes)
-	assert.False(t, pushes[2].OK)
-	assert.Contain(t, "newer run", pushes[2].Error)
+	for _, row := range pushes[1:] {
+		assert.False(t, row.OK)
+		assert.True(t, row.Skipped)
+		assert.Equal(t, SkippedStale, row.Error)
+	}
+	chip := must.Value(p.Status(context.Background()))
+	assert.True(t, *chip.LastOK) // a stale manual push is not a failure
 }
 
 func TestStaleCheckPerProfile(t *testing.T) {

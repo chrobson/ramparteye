@@ -95,6 +95,7 @@ type Store interface {
 	AuditActions(ctx context.Context) ([]string, error)
 	dojo.SettingsStore
 	DojoPushes(ctx context.Context, limit int) ([]store.DojoPush, error)
+	DojoLastPush(ctx context.Context, runID int64) (store.DojoLastPush, error)
 }
 
 // Runner is the scan runner as the UI sees it; *runner.Runner satisfies it.

@@ -19,7 +19,7 @@
 <div class="mt-4 flex flex-wrap gap-2">
 {{if $run.Applied}}<a class="btn" href="/changes/{{$run.ID}}">Changes in this run</a>{{end}}
 {{if and $run.FinishedRun (can .Ctx "export")}}<a class="btn" href="/exchange/export.csv?run={{$run.ID}}">Download CSV</a>
-<form method="post" action="/scans/{{$run.ID}}/push" data-confirm="Push the findings of run #{{$run.ID}} to DefectDojo now?" data-confirm-ok="Push now"><button type="submit" class="btn btn-primary">Push to DefectDojo now</button></form>{{end}}
+{{if not $d.StalePush}}<form method="post" action="/scans/{{$run.ID}}/push" data-confirm="Push the findings of run #{{$run.ID}} to DefectDojo now?" data-confirm-ok="Push now"><button type="submit" class="btn btn-primary">Push to DefectDojo now</button></form>{{end}}{{end}}
 </div>
 
 {{$rc := $d.Receipt}}<section class="panel mt-4" aria-label="Safety receipt">

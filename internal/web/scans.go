@@ -184,6 +184,9 @@ type RunPage struct {
 	Title   string
 	Run     RunRow
 	Receipt ReceiptView
+	// StalePush is set when a newer run of the profile is already pushed to
+	// DefectDojo, so pushing this run would be refused.
+	StalePush bool
 }
 
 // pathID parses a positive decimal id from the URL parameter name.
@@ -232,6 +235,13 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := RunPage{Title: "Scan #" + strconv.FormatInt(run.ID, 10), Run: s.runRow(run, s.activeSet())}
+	if run.Status == store.RunDone && run.ConfigID != nil {
+		last, err := s.d.Store.DojoLastPush(r.Context(), run.ID)
+		if err != nil {
+			s.log.Warn("load DefectDojo push history", "run", run.ID, "err", err)
+		}
+		p.StalePush = err == nil && last.RunID != nil && run.ID < *last.RunID
+	}
 	rep, found, err := s.loadReport(r.Context(), run.ID)
 	if err != nil {
 		s.log.Error("load safety receipt", "run", run.ID, "err", err)

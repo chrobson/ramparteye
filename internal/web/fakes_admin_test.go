@@ -19,6 +19,7 @@ type adminData struct {
 	nextRole int64
 	dojo     *store.DojoConfig
 	pushes   []store.DojoPush
+	lastPush store.DojoLastPush
 	// auditFull makes AuditQuery return a full page at any offset.
 	auditFull bool
 }
@@ -333,6 +334,10 @@ func (f *fakeStore) SaveDojoConfig(_ context.Context, c store.DojoConfig) error 
 	c.ClearToken = false
 	f.admin.dojo = &c
 	return nil
+}
+
+func (f *fakeStore) DojoLastPush(context.Context, int64) (store.DojoLastPush, error) {
+	return f.admin.lastPush, nil
 }
 
 func (f *fakeStore) DojoPushes(context.Context, int) ([]store.DojoPush, error) {

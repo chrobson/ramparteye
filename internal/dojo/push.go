@@ -33,8 +33,7 @@ const (
 	// testTitlePrefix names the DefectDojo test of a scan profile.
 	testTitlePrefix = "RampartEye – "
 	adHocProfile    = "ad-hoc"
-	// SkippedStale is the error text of an automatic push that was skipped
-	// because a newer run of the same profile had already been pushed.
+	// SkippedStale is the error text of a push that was skipped because a newer run of the same profile had already been pushed.
 	SkippedStale = "skipped: newer run already pushed"
 	panicMessage = "internal error: DefectDojo push panicked"
 )
@@ -77,7 +76,7 @@ type PushRecord struct {
 	OK       bool
 	Error    string
 	Trigger  string
-	// Skipped is an automatic push not sent because a newer run of the
+	// Skipped is a push not sent because a newer run of the
 	// same profile had already been pushed (OK is false, Error SkippedStale).
 	Skipped bool
 }
@@ -255,8 +254,9 @@ func (p *Pusher) withBase(ctx context.Context) (context.Context, func()) {
 // finished run) into the DefectDojo test of its scan profile. Every attempt
 // is recorded, failed or not, except when DefectDojo is not configured
 // (ErrNotConfigured), the pusher is closed (ErrClosed) or the trigger is
-// unknown. A run older than the newest pushed run of its profile is refused
-// with ErrStaleRun. A failed push returns the record together with the
+// unknown. A run older than the newest pushed run of its profile is recorded as skipped (not
+// failed); an automatic push returns no error, any other trigger gets
+// ErrStaleRun. A failed push returns the record together with the
 // error.
 func (p *Pusher) PushRun(ctx context.Context, runID int64, trigger string) (PushRecord, error) {
 	done, err := p.begin()
@@ -313,12 +313,15 @@ func (p *Pusher) push(ctx context.Context, s Settings, settingsErr error, runID 
 	// Only profile runs replace their test (close_old_findings), so only
 	// they can undo a newer push.
 	if snap.ProfileName != "" && last.RunID != nil && snap.Run.ID < *last.RunID {
+		// Recorded as skipped, not failed: the chip must not turn red
+		// because the operator pushed an old run.
+		rec.Skipped, rec.Error, rec.At = true, SkippedStale, time.Now()
+		row.Skipped, row.Error = true, SkippedStale
+		recErr := p.record(ctx, row)
 		if trigger == TriggerAuto {
-			rec.Skipped, rec.Error, rec.At = true, SkippedStale, time.Now()
-			row.Skipped, row.Error = true, SkippedStale
-			return rec, p.record(ctx, row)
+			return rec, recErr
 		}
-		return p.fail(ctx, rec, row, s.Token, fmt.Errorf("run %d: %w (run %d)", snap.Run.ID, ErrStaleRun, *last.RunID))
+		return rec, errors.Join(fmt.Errorf("run %d: %w (run %d)", snap.Run.ID, ErrStaleRun, *last.RunID), recErr)
 	}
 
 	svcs, anns := pushInput(ctx, p.st, snap)
