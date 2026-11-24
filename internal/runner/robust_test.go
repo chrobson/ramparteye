@@ -325,3 +325,17 @@ type panickingFinishStore struct{ *fakeStore }
 func (s *panickingFinishStore) FinishRun(context.Context, int64, string, time.Duration) (bool, error) {
 	panic("finish exploded")
 }
+
+// The write timeout of a chunk's results starts when its scan has ended: a
+// scan longer than dbTimeout must not leave CompleteChunk an expired context.
+func TestCompleteChunkTimeoutStartsAfterScan(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetIP, Value: "10.20.0.5"})
+	f.sc.delay = 300 * time.Millisecond
+	t0 := time.Now()
+
+	runID := f.runNow(t)
+
+	assert.Equal(t, store.RunDone, f.fs.runStatus(runID))
+	assert.Len(t, 1, f.fs.completeDeadlines)
+	assert.True(t, f.fs.completeDeadlines[0].After(t0.Add(dbTimeout+250*time.Millisecond)))
+}

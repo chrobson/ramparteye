@@ -27,7 +27,9 @@ type fakeStore struct {
 	hosts    []model.HostObs
 	services []model.ServiceObs
 	leases   map[int64]int // chunk id -> number of leases
-	nextID   int64
+	// completeDeadlines are the context deadlines CompleteChunk got.
+	completeDeadlines []time.Time
+	nextID            int64
 
 	httpObs    map[int64]model.HTTPObs
 	legacy     map[int64]store.LegacyTLS
@@ -231,9 +233,12 @@ func (f *fakeStore) chunk(id int64) *fakeChunk {
 	panic("no chunk")
 }
 
-func (f *fakeStore) CompleteChunk(_ context.Context, c store.Chunk, dur time.Duration, hosts []model.HostObs, svcs []model.ServiceObs) error {
+func (f *fakeStore) CompleteChunk(ctx context.Context, c store.Chunk, dur time.Duration, hosts []model.HostObs, svcs []model.ServiceObs) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if dl, ok := ctx.Deadline(); ok {
+		f.completeDeadlines = append(f.completeDeadlines, dl)
+	}
 	fc, err := f.leased(c)
 	if err != nil {
 		return err

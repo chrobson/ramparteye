@@ -118,9 +118,9 @@ func (s *session) partition(batch []store.Chunk) [][]store.Chunk {
 // rescanned chunk by chunk within the same leases, so one bad chunk cannot
 // fail the others. Only store errors are returned.
 func (r *Runner) scanGroup(ctx context.Context, s *session, chunks []store.Chunk) error {
-	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
-	defer cancel()
 	if ctx.Err() != nil {
+		dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
+		defer cancel()
 		return r.settle(ctx, dbctx, s, chunks, ctx.Err(), true)
 	}
 	prefixes := make([]netip.Prefix, len(chunks))
@@ -130,6 +130,9 @@ func (r *Runner) scanGroup(ctx context.Context, s *session, chunks []store.Chunk
 	t0 := r.cfg.Now()
 	hosts, svcs, err := r.scan(ctx, s, prefixes, s.optsFor(prefixes[0]))
 	dur := r.cfg.Now().Sub(t0)
+	// The write timeout starts now: the scan itself may take far longer.
+	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
+	defer cancel()
 	if err != nil {
 		interrupted := ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 		if !interrupted && len(chunks) > 1 {
