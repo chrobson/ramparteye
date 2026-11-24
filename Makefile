@@ -1,4 +1,4 @@
-.PHONY: build test test-integration vet css css-check
+.PHONY: build test test-integration test-db test-db-down vet css css-check
 
 VERSION ?= dev
 
@@ -11,8 +11,20 @@ vet:
 test: vet
 	go test -race ./...
 
-test-integration:
-	go test -tags integration ./...
+# Integration tests run against a throwaway Percona PostgreSQL with pg_tde
+# (tools/test-db.sh); every test gets its own schema.
+RAMPART_TEST_DATABASE_URL ?= postgres://rampart:rampart@localhost:55432/rampart?sslmode=disable
+RAMPART_TEST_EXPECT_TDE ?= 1
+
+test-db:
+	./tools/test-db.sh
+
+test-db-down:
+	docker rm -f ramparteye-testdb
+
+test-integration: test-db
+	RAMPART_TEST_DATABASE_URL='$(RAMPART_TEST_DATABASE_URL)' RAMPART_TEST_EXPECT_TDE=$(RAMPART_TEST_EXPECT_TDE) \
+		go test -tags integration -count=1 ./...
 
 # Rebuild the committed Tailwind CSS (downloads the pinned standalone CLI).
 css:

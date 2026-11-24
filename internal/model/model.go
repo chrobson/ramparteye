@@ -216,3 +216,12 @@ type Finding struct {
 	Mitigation       string // signature remediation
 	References       string // newline-separated URLs
 }
+
+// NewUser is an account to create. Role names a role (Admin, Operator,
+// Analyst, Viewer or a custom one); PasswordHash is already hashed.
+type NewUser struct {
+	Login              string
+	PasswordHash       string
+	Role               string
+	MustChangePassword bool
+}

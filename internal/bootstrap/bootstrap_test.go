@@ -10,31 +10,34 @@ import (
 	"github.com/ctx42/testing/pkg/assert"
 
 	"github.com/chrobson/ramparteye/internal/config"
+	"github.com/chrobson/ramparteye/internal/model"
 )
 
-type created struct {
-	Login, Hash, Role string
-	MustChange        bool
-}
-
 // fakeStore is a hand-written Store: ctx42 mock adds ceremony without value
-// for two trivial methods.
+// for two trivial methods. Like the Postgres store, it creates all users or
+// none.
 type fakeStore struct {
-	users   int
-	made    []created
-	failOn  string
-	countEr error
+	users    int
+	made     []model.NewUser
+	failOn   string
+	lostRace bool
+	countEr  error
 }
 
 func (f *fakeStore) CountUsers(context.Context) (int, error) { return f.users, f.countEr }
 
-func (f *fakeStore) CreateUser(_ context.Context, login, hash, role string, must bool) error {
-	if login == f.failOn {
-		return errors.New("boom")
+func (f *fakeStore) CreateInitialUsers(_ context.Context, users []model.NewUser) (bool, error) {
+	if f.lostRace {
+		return false, nil
 	}
-	f.made = append(f.made, created{login, hash, role, must})
-	f.users++
-	return nil
+	for _, u := range users {
+		if u.Login == f.failOn {
+			return false, errors.New("boom")
+		}
+	}
+	f.made = append(f.made, users...)
+	f.users += len(users)
+	return true, nil
 }
 
 func fakeHash(pw string) (string, error) { return "hash:" + pw, nil }
@@ -50,13 +53,13 @@ func TestFirstStartCreatesOneAdmin(t *testing.T) {
 	assert.Len(t, 1, st.made)
 	assert.Equal(t, "admin", st.made[0].Login)
 	assert.Equal(t, "Admin", st.made[0].Role)
-	assert.True(t, st.made[0].MustChange)
+	assert.True(t, st.made[0].MustChangePassword)
 	assert.Equal(t, 1, strings.Count(out.String(), "admin password (shown once):"))
 
 	pw := strings.TrimSpace(strings.SplitN(out.String(), "admin password (shown once):", 2)[1])
 	assert.True(t, len(pw) >= 20)
-	assert.Equal(t, "hash:"+pw, st.made[0].Hash)
-	assert.False(t, strings.Contains(st.made[0].Hash, "admin password"))
+	assert.Equal(t, "hash:"+pw, st.made[0].PasswordHash)
+	assert.False(t, strings.Contains(st.made[0].PasswordHash, "admin password"))
 }
 
 func TestRestartDoesNotRecreate(t *testing.T) {
@@ -82,8 +85,8 @@ func TestDemoCreatesFourRoles(t *testing.T) {
 	roles := map[string]string{}
 	for _, u := range st.made {
 		roles[u.Login] = u.Role
-		assert.False(t, u.MustChange)
-		pw := strings.TrimPrefix(u.Hash, "hash:")
+		assert.False(t, u.MustChangePassword)
+		pw := strings.TrimPrefix(u.PasswordHash, "hash:")
 		assert.True(t, strings.Contains(out.String(), u.Login))
 		assert.True(t, strings.Contains(out.String(), pw))
 	}
@@ -99,7 +102,7 @@ func TestDemoPasswordsDiffer(t *testing.T) {
 	assert.NoError(t, err)
 	seen := map[string]bool{}
 	for _, u := range st.made {
-		seen[u.Hash] = true
+		seen[u.PasswordHash] = true
 	}
 	assert.Len(t, 4, seen)
 }
@@ -111,7 +114,21 @@ func TestFailureStaysSilent(t *testing.T) {
 	_, err := ensure(context.Background(), st, config.Config{Demo: true}, &out, fakeHash)
 
 	assert.Error(t, err)
+	assert.Len(t, 0, st.made)
 	assert.Equal(t, "", out.String()) // never print passwords that were not persisted
+}
+
+// Another process created the accounts between the count and the create:
+// its passwords were printed there, nothing is printed here.
+func TestLostFirstStartRaceStaysSilent(t *testing.T) {
+	st := &fakeStore{lostRace: true}
+	var out bytes.Buffer
+
+	res, err := ensure(context.Background(), st, config.Config{}, &out, fakeHash)
+
+	assert.NoError(t, err)
+	assert.Equal(t, Result{}, res)
+	assert.Equal(t, "", out.String())
 }
 
 func TestCountError(t *testing.T) {
@@ -124,7 +141,7 @@ func TestEnsureUsesBcrypt(t *testing.T) {
 	st := &fakeStore{}
 	_, err := Ensure(context.Background(), st, config.Config{}, &bytes.Buffer{})
 	assert.NoError(t, err)
-	assert.True(t, strings.HasPrefix(st.made[0].Hash, "$2a$"))
+	assert.True(t, strings.HasPrefix(st.made[0].PasswordHash, "$2a$"))
 }
 
 func TestGeneratePasswordAlphabet(t *testing.T) {

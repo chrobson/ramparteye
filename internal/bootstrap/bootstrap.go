@@ -12,12 +12,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/chrobson/ramparteye/internal/config"
+	"github.com/chrobson/ramparteye/internal/model"
 )
 
 // Store is the persistence Ensure needs; the Postgres store satisfies it.
 type Store interface {
 	CountUsers(ctx context.Context) (int, error)
-	CreateUser(ctx context.Context, login, passwordHash, role string, mustChangePassword bool) error
+	// CreateInitialUsers creates all users or none, and only while no user
+	// exists; it reports whether it created them.
+	CreateInitialUsers(ctx context.Context, users []model.NewUser) (bool, error)
 }
 
 // Result reports what Ensure did.
@@ -59,6 +62,7 @@ func ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer, has
 		accounts = demoAccounts
 	}
 	passwords := make([]string, len(accounts))
+	users := make([]model.NewUser, len(accounts))
 	for i, a := range accounts {
 		pw, err := generatePassword()
 		if err != nil {
@@ -68,11 +72,16 @@ func ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer, has
 		if err != nil {
 			return Result{}, fmt.Errorf("bootstrap: hash password: %w", err)
 		}
-		// Demo accounts are throwaway; the real admin must rotate on login.
-		if err := st.CreateUser(ctx, a.login, h, a.role, !cfg.Demo); err != nil {
-			return Result{}, fmt.Errorf("bootstrap: create %s: %w", a.login, err)
-		}
 		passwords[i] = pw
+		// Demo accounts are throwaway; the real admin must rotate on login.
+		users[i] = model.NewUser{Login: a.login, PasswordHash: h, Role: a.role, MustChangePassword: !cfg.Demo}
+	}
+	created, err := st.CreateInitialUsers(ctx, users)
+	if err != nil {
+		return Result{}, fmt.Errorf("bootstrap: create users: %w", err)
+	}
+	if !created { // another process won the first start and printed its passwords
+		return Result{}, nil
 	}
 
 	var b strings.Builder
