@@ -49,10 +49,17 @@ type Invocation struct {
 
 // Budget is the rate and probe budget a run is held to.
 type Budget struct {
-	RunPPS            int // packets/s budget of this run (its max rate); 0 = none
-	PolicyPPS         int // instance-wide policy limit in packets/s; 0 = none
-	PathProbesPerHost int // path probes allowed per host per run; <= 0 = unlimited
+	RunPPS    int // packets/s budget of this run (its max rate); 0 = none
+	PolicyPPS int // instance-wide policy limit in packets/s; 0 = none
+	// PathProbesPerHost is the path probes allowed per host per run:
+	// 0 = unlimited, PathProbesDisabled (negative) = none at all.
+	PathProbesPerHost int
 }
+
+// PathProbesDisabled is the Budget.PathProbesPerHost that refuses every
+// path probe (RAMPART_PATH_PROBES_PER_HOST=0). The receipt records it as
+// its PathProbeBudget.
+const PathProbesDisabled = -1
 
 // Snapshot is the live view of a meter for the dashboard panel.
 type Snapshot struct {
@@ -344,7 +351,7 @@ func (m *Meter) ProbeGate(host netip.Addr) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cur.gateCalls++
-	if limit := m.budget.PathProbesPerHost; limit > 0 && m.base[host]+m.cur.probes[host] >= limit {
+	if limit := m.budget.PathProbesPerHost; limit < 0 || limit > 0 && m.base[host]+m.cur.probes[host] >= limit {
 		m.cur.refused++
 		return false
 	}
@@ -613,7 +620,7 @@ func (m *Meter) receiptLocked(allow Allowlist) Receipt {
 		r.TimeWindow = m.tw.String()
 	}
 	r.OutsideWindow = c.outside
-	r.PathProbeBudget = max(m.budget.PathProbesPerHost, 0)
+	r.PathProbeBudget = max(m.budget.PathProbesPerHost, PathProbesDisabled)
 	r.PathProbesRefused = c.refused
 	r.PathProbeSignatures, r.PathProbeSignaturesKnown = m.pathSigs, m.pathSigsKnown
 	r.PathProbeGateCalls = c.gateCalls

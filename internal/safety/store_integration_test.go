@@ -135,3 +135,17 @@ func TestSaveUncheckedAccumulatesAndResolves(t *testing.T) {
 	assert.Equal(t, 0, got.UncheckedInvocations)
 	assert.True(t, got.PathProbeSignaturesKnown)
 }
+
+// Disabled path probes are the most restrictive budget and survive a resume
+// with a looser one.
+func TestSaveKeepsDisabledProbeBudget(t *testing.T) {
+	ctx := context.Background()
+	pool, runID := newRun(t)
+	assert.NoError(t, safety.Save(ctx, pool, safety.Receipt{RunID: runID, PathProbeBudget: safety.PathProbesDisabled}))
+	assert.NoError(t, safety.Save(ctx, pool, safety.Receipt{RunID: runID, PathProbeBudget: 50}))
+
+	got, err := safety.Load(ctx, pool, runID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, safety.PathProbesDisabled, got.PathProbeBudget)
+}

@@ -613,3 +613,23 @@ func TestProbeGateStripsZone(t *testing.T) {
 	assert.False(t, m.ProbeGate(netip.MustParseAddr("fe80::1%eth1")))
 	assert.Equal(t, map[string]int{"fe80::1": 1}, m.Drain(nil).ProbeHosts)
 }
+
+func TestPathProbesDisabledRefusesAll(t *testing.T) {
+	m := NewMeter()
+	m.SetBudget(Budget{PathProbesPerHost: PathProbesDisabled})
+	a := netip.MustParseAddr("10.0.0.1")
+
+	assert.False(t, m.ProbeGate(a))
+	assert.False(t, m.ProbeGate(a))
+
+	r := m.Receipt(nil)
+	assert.Equal(t, int64(0), r.PathProbes)
+	assert.Equal(t, int64(2), r.PathProbesRefused)
+	assert.Equal(t, PathProbesDisabled, r.PathProbeBudget)
+	got := checkByName(t, BuildReport(r), "path probe budget")
+	assert.True(t, got.OK)
+	assert.Contain(t, "path probes disabled", got.Detail)
+
+	r.PathProbes, r.PathProbesMaxHost = 1, 1 // a probe got through anyway
+	assert.False(t, checkByName(t, BuildReport(r), "path probe budget").OK)
+}

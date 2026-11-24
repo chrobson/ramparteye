@@ -17,12 +17,13 @@ import (
 
 // Defaults kept from the prototype.
 const (
-	DefaultHTTPAddr         = ":9080"
-	DefaultMaxRate          = 5000
-	DefaultAllPortsMaxAddrs = 16
-	DefaultSecretsDir       = "/var/lib/ramparteye/secrets"
-	DefaultDojoProductType  = "RampartEye"
-	DefaultDojoEngagement   = "Continuous discovery"
+	DefaultHTTPAddr          = ":9080"
+	DefaultMaxRate           = 5000
+	DefaultAllPortsMaxAddrs  = 16
+	DefaultPathProbesPerHost = 50
+	DefaultSecretsDir        = "/var/lib/ramparteye/secrets"
+	DefaultDojoProductType   = "RampartEye"
+	DefaultDojoEngagement    = "Continuous discovery"
 )
 
 // Config is the process configuration. There is no default scan scope:
@@ -56,6 +57,9 @@ type Config struct {
 	AllPortsMaxAddrs int
 	HTTPTimeout      time.Duration // RAMPART_HTTP_TIMEOUT, default 10s
 	HTTPRetries      int           // RAMPART_HTTP_RETRIES, 0-3, default 1
+	// PathProbesPerHost is the signature path probes allowed per host per
+	// run (RAMPART_PATH_PROBES_PER_HOST, default 50; 0 = no path probes).
+	PathProbesPerHost int
 
 	DojoURL         string // RAMPART_DOJO_URL (empty = DefectDojo disabled)
 	DojoToken       string `json:"-"` // RAMPART_DOJO_TOKEN
@@ -223,6 +227,12 @@ func Load(env func(string) string) (Config, error) {
 	}
 	if c.AllPortsMaxAddrs < 0 {
 		return c, fmt.Errorf("RAMPART_ALL_PORTS_MAX_ADDRS must not be negative")
+	}
+	if c.PathProbesPerHost, err = num("RAMPART_PATH_PROBES_PER_HOST", DefaultPathProbesPerHost); err != nil {
+		return c, err
+	}
+	if c.PathProbesPerHost < 0 {
+		return c, fmt.Errorf("RAMPART_PATH_PROBES_PER_HOST must not be negative")
 	}
 	if c.TickEvery, err = dur("RAMPART_TICK_EVERY", "1m"); err != nil {
 		return c, err

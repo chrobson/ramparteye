@@ -287,3 +287,16 @@ func TestLoadInvalidTrustedProxies(t *testing.T) {
 
 	assert.ErrorContain(t, "RAMPART_TRUSTED_PROXIES", err)
 }
+
+func TestLoadPathProbesPerHost(t *testing.T) {
+	cfg, err := Load(envMap(nil))
+	assert.NoError(t, err)
+	assert.Equal(t, 50, cfg.PathProbesPerHost)
+
+	cfg, err = Load(envMap(map[string]string{"RAMPART_PATH_PROBES_PER_HOST": "0"}))
+	assert.NoError(t, err)
+	assert.Equal(t, 0, cfg.PathProbesPerHost)
+
+	_, err = Load(envMap(map[string]string{"RAMPART_PATH_PROBES_PER_HOST": "-1"}))
+	assert.ErrorContain(t, "RAMPART_PATH_PROBES_PER_HOST must not be negative", err)
+}

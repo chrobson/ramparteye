@@ -161,6 +161,9 @@ func BuildReport(r Receipt) Report {
 		add("path probe budget", StatusUnmeasured, probeMeasured,
 			"%d web services evaluated with %d path-probe signatures but the probe gate was never consulted",
 			r.PathProbeWebServices, r.PathProbeSignatures)
+	case r.PathProbeBudget < 0:
+		add("path probe budget", passIf(r.PathProbes == 0), probeMeasured,
+			"path probes disabled: %d sent, %d refused", r.PathProbes, r.PathProbesRefused)
 	default:
 		add("path probe budget", passIf(r.PathProbeBudget <= 0 || r.PathProbesMaxHost <= r.PathProbeBudget),
 			probeMeasured,
