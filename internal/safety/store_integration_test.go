@@ -37,7 +37,7 @@ func TestSaveLoadAccumulates(t *testing.T) {
 		ArgvSHA256: "abc", ArgvSample: []string{"-sn x"},
 		HTTPGet: 3, HTTPHead: 1, HTTPPeakRPS: 4, HTTPRateLimit: 20, HTTPBurst: 5,
 		TargetsChecked: 256, TimeWindow: "22:00-06:00", OutsideWindow: 1,
-		PathProbeBudget: 2, PathProbes: 4, PathProbesRefused: 1, PathProbeSignatures: 2, PathProbeGateCalls: 5,
+		PathProbeBudget: 2, PathProbes: 4, PathProbesRefused: 1, PathProbeSignatures: 2, PathProbeGateCalls: 5, PathProbeWebServices: 3,
 		ProbeHosts: map[string]int{"10.0.0.1": 2, "10.0.0.2": 2}}
 	assert.NoError(t, safety.Save(ctx, pool, first))
 
@@ -49,6 +49,7 @@ func TestSaveLoadAccumulates(t *testing.T) {
 	assert.Equal(t, int64(4), got.PathProbes)
 	assert.Equal(t, 2, got.PathProbesMaxHost)
 	assert.Equal(t, int64(5), got.PathProbeGateCalls)
+	assert.Equal(t, int64(3), got.PathProbeWebServices)
 	assert.Equal(t, 20.0, got.HTTPRateLimit)
 	assert.Equal(t, []string{"-sn x"}, got.ArgvSample)
 

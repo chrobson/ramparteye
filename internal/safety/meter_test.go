@@ -377,7 +377,13 @@ func TestPathProbeGateNeverConsulted(t *testing.T) {
 	m.SetBudget(Budget{PathProbesPerHost: 2})
 	m.SetPathSignatures(3)
 
+	// No web services evaluated: the gate had nothing to do.
 	got := checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget")
+	assert.Equal(t, StatusPass, got.Status)
+	assert.Contain(t, "not applicable: no web services", got.Detail)
+
+	m.AddWebServices(2)
+	got = checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget")
 	assert.Equal(t, StatusUnmeasured, got.Status)
 
 	m.ProbeGate(netip.MustParseAddr("10.0.0.1"))
@@ -478,4 +484,24 @@ func TestTransportCountsRedirectHop(t *testing.T) {
 	_ = resp.Body.Close()
 
 	assert.Equal(t, int64(2), m.Receipt(nil).HTTPGet) // the 302 and the hop it led to
+}
+
+func TestReportStatus(t *testing.T) {
+	ok := Receipt{}
+	rep := BuildReport(ok)
+	assert.Equal(t, ReportOK, rep.Status)
+	assert.True(t, rep.OK)
+
+	incomplete := Receipt{NmapPackets: 10} // sent packets, no run time
+	rep = BuildReport(incomplete)
+	assert.Equal(t, ReportIncomplete, rep.Status)
+	assert.False(t, rep.OK)
+
+	failed := Receipt{HTTPOther: 1}
+	rep = BuildReport(failed)
+	assert.Equal(t, ReportFailed, rep.Status)
+	assert.False(t, rep.OK)
+
+	both := Receipt{NmapPackets: 10, HTTPOther: 1} // a failure outranks unmeasured
+	assert.Equal(t, ReportFailed, BuildReport(both).Status)
 }

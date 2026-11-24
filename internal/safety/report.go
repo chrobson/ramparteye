@@ -27,25 +27,35 @@ type Check struct {
 	Detail   string `json:"detail"`
 }
 
+// ReportStatus is the overall verdict of a report.
+type ReportStatus string
+
+const (
+	ReportOK         ReportStatus = "ok"         // every check passed
+	ReportIncomplete ReportStatus = "incomplete" // nothing failed, something was unmeasured
+	ReportFailed     ReportStatus = "failed"     // at least one check failed
+)
+
 // Report is the receipt with derived values and the checks: the body of
-// GET /runs/{id}/safety.json and of `ramparteye audit <run>`. OK is true
-// only when every check passed (an unmeasured check makes it false).
+// GET /runs/{id}/safety.json and of `ramparteye audit <run>`. Status is
+// "failed" when any check failed, "incomplete" when none failed but one was
+// unmeasured, else "ok"; OK is Status == "ok".
 type Report struct {
 	Receipt
-	EffectivePPS float64  `json:"effective_pps"`
-	OK           bool     `json:"ok"`
-	Checks       []Check  `json:"checks"`
-	Notes        []string `json:"notes"`
+	EffectivePPS float64      `json:"effective_pps"`
+	Status       ReportStatus `json:"status"`
+	OK           bool         `json:"ok"`
+	Checks       []Check      `json:"checks"`
+	Notes        []string     `json:"notes"`
 }
 
 // BuildReport derives the five checks from r: scope respected, rate within
 // budget, GET/HEAD only, time window respected and path probe budget.
 func BuildReport(r Receipt) Report {
-	rep := Report{Receipt: r, EffectivePPS: round1(r.EffectivePPS()), OK: true}
+	rep := Report{Receipt: r, EffectivePPS: round1(r.EffectivePPS())}
 	add := func(name string, st Status, measured, detail string, a ...any) {
 		rep.Checks = append(rep.Checks, Check{Name: name, Status: st, OK: st == StatusPass,
 			Measured: measured, Detail: fmt.Sprintf(detail, a...)})
-		rep.OK = rep.OK && st == StatusPass
 	}
 	passIf := func(ok bool) Status {
 		if ok {
@@ -133,15 +143,34 @@ func BuildReport(r Receipt) Report {
 		budget = fmt.Sprint(r.PathProbeBudget)
 	}
 	probeMeasured := fmt.Sprintf("%d max per host", r.PathProbesMaxHost)
-	if r.PathProbeSignatures > 0 && r.PathProbeGateCalls == 0 && r.PathProbes == 0 && r.PathProbesRefused == 0 {
+	gateUnused := r.PathProbeSignatures > 0 && r.PathProbeGateCalls == 0 && r.PathProbes == 0 && r.PathProbesRefused == 0
+	switch {
+	case gateUnused && r.PathProbeWebServices == 0:
+		add("path probe budget", StatusPass, probeMeasured,
+			"not applicable: no web services were evaluated (%d path-probe signatures enabled)", r.PathProbeSignatures)
+	case gateUnused:
 		add("path probe budget", StatusUnmeasured, probeMeasured,
-			"%d enabled path-probe signatures but the probe gate was never consulted", r.PathProbeSignatures)
-	} else {
+			"%d web services evaluated with %d path-probe signatures but the probe gate was never consulted",
+			r.PathProbeWebServices, r.PathProbeSignatures)
+	default:
 		add("path probe budget", passIf(r.PathProbeBudget <= 0 || r.PathProbesMaxHost <= r.PathProbeBudget),
 			probeMeasured,
 			"%d probes sent, busiest host %d against a budget of %s per host, %d refused",
 			r.PathProbes, r.PathProbesMaxHost, budget, r.PathProbesRefused)
 	}
+
+	rep.Status = ReportOK
+	for _, c := range rep.Checks {
+		switch c.Status {
+		case StatusFail:
+			rep.Status = ReportFailed
+		case StatusUnmeasured:
+			if rep.Status != ReportFailed {
+				rep.Status = ReportIncomplete
+			}
+		}
+	}
+	rep.OK = rep.Status == ReportOK
 
 	if r.NmapRawReported < r.NmapInvocations {
 		rep.Notes = append(rep.Notes, fmt.Sprintf(

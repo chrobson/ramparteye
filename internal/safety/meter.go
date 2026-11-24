@@ -81,6 +81,7 @@ type acc struct {
 	probes    map[netip.Addr]int
 	refused   int64
 	gateCalls int64
+	webSvcs   int64
 	outside   int64
 }
 
@@ -190,6 +191,17 @@ func (m *Meter) SetPathSignatures(n int) {
 	}
 	m.mu.Lock()
 	m.pathSigs = n
+	m.mu.Unlock()
+}
+
+// AddWebServices records n web services handed to the signature engine. With
+// none, an unused probe gate is "not applicable" rather than unmeasured.
+func (m *Meter) AddWebServices(n int) {
+	if m == nil || n <= 0 {
+		return
+	}
+	m.mu.Lock()
+	m.cur.webSvcs += int64(n)
 	m.mu.Unlock()
 }
 
@@ -400,6 +412,8 @@ type Receipt struct {
 	// PathProbeGateCalls how often the gate was consulted.
 	PathProbeSignatures int   `json:"path_probe_signatures"`
 	PathProbeGateCalls  int64 `json:"path_probe_gate_calls"`
+	// PathProbeWebServices is how many web services were evaluated.
+	PathProbeWebServices int64 `json:"path_probe_web_services"`
 	// ProbeHosts is the per-host probe count of this Drain; Save adds it to
 	// the stored counts. Not part of the JSON report.
 	ProbeHosts map[string]int `json:"-"`
@@ -500,6 +514,7 @@ func (m *Meter) receiptLocked(allow Allowlist) Receipt {
 	r.PathProbesRefused = c.refused
 	r.PathProbeSignatures = m.pathSigs
 	r.PathProbeGateCalls = c.gateCalls
+	r.PathProbeWebServices = c.webSvcs
 	if len(c.probes) > 0 {
 		r.ProbeHosts = make(map[string]int, len(c.probes))
 	}
