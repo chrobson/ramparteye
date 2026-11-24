@@ -227,10 +227,14 @@ func StripUnknownKeys(b []byte) ([]byte, []string) {
 	if err := dec.Decode(&top); err != nil {
 		return b, nil
 	}
-	ignored := map[string]bool{}
+	// Trailing data must reach Validate, which reports it.
+	if _, err := dec.Token(); err != io.EOF {
+		return b, nil
+	}
+	ignored := map[string]json.RawMessage{}
 	for k := range top {
 		if k != "findings" {
-			ignored[k] = true
+			ignored[k] = nil
 			delete(top, k)
 		}
 	}
@@ -241,7 +245,7 @@ func StripUnknownKeys(b []byte) ([]byte, []string) {
 	for _, f := range findings {
 		for k := range f {
 			if !allowedFindingKeys[k] {
-				ignored[k] = true
+				ignored[k] = nil
 				delete(f, k)
 			}
 		}
@@ -256,7 +260,7 @@ func StripUnknownKeys(b []byte) ([]byte, []string) {
 			}
 			for k := range ep {
 				if !allowedEndpointKeys[k] {
-					ignored[k] = true
+					ignored[k] = nil
 					delete(ep, k)
 				}
 			}
@@ -273,14 +277,5 @@ func StripUnknownKeys(b []byte) ([]byte, []string) {
 	if err != nil {
 		return b, nil
 	}
-	return out, sortedKeys2(ignored)
-}
-
-func sortedKeys2(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+	return out, sortedKeys(ignored)
 }

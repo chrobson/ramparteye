@@ -233,3 +233,15 @@ func TestParseTooManyEndpoints(t *testing.T) {
 
 	assert.ErrorIs(t, ErrTooManyItems, err)
 }
+
+func TestParseGenericRejectsTrailingData(t *testing.T) {
+	doc := `{"findings":[{"title":"t","severity":"Info","description":"d","unique_id_from_tool":"u",` +
+		`"endpoints":[{"host":"10.20.0.5","port":22,"protocol":"tcp"}]}]}`
+
+	_, _, err := Parse([]byte(doc))
+	assert.NoError(t, err)
+	_, _, err = Parse([]byte(doc + " garbage"))
+	assert.Error(t, err)
+	_, _, err = Parse([]byte(doc + doc))
+	assert.Error(t, err)
+}

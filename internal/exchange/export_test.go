@@ -64,6 +64,13 @@ func TestWriteCSV(t *testing.T) {
 	assert.Equal(t, "dmz;ops", col(t, ssh, "tags"))
 	assert.Equal(t, "web.lab.test", col(t, ssh, "hostname"))
 	assert.Equal(t, "apache;phpmyadmin", col(t, web, "detections"))
+	for _, in := range []string{" =1", "\n=1", "\t=1", "\u00a0=1", "\v=1", "\f=1", "\x00=1", "\ufeff=1",
+		"\u200b=1", " \n =1", "\x00@x", "\v+1", "\f-1"} {
+		assert.Equal(t, "'"+in, safeCell(in), in)
+	}
+	for _, in := range []string{" a=1", "\n x", "   ", "\u200b", "\u200ba=1"} {
+		assert.Equal(t, in, safeCell(in), in)
+	}
 	assert.Equal(t, "admin-panel;server", col(t, web, "categories"))
 }
 

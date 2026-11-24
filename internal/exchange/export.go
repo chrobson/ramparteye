@@ -255,7 +255,7 @@ func safeCell(s string) string {
 		return "'" + s
 	}
 	for _, r := range s {
-		if unicode.IsSpace(r) || unicode.IsControl(r) || r == '\u00a0' {
+		if unicode.IsSpace(r) || unicode.IsControl(r) || r == '\ufeff' || r == '\u200b' {
 			continue
 		}
 		if r == '=' || r == '+' || r == '-' || r == '@' {

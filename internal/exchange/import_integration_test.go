@@ -208,5 +208,5 @@ func TestStoreCapsReportErrorsAndDedupesZones(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, 100, rep.Errors)
 	assert.Equal(t, 56, rep.ErrorsTruncated) // 50 over + 5 + the dropped-host message
-	assert.Equal(t, 1, rep.Dropped) // both zones are one address
+	assert.Equal(t, 1, rep.Dropped)          // both zones are one address
 }
