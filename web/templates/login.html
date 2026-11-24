@@ -1,0 +1,11 @@
+{{define "title"}}Sign in{{end}}
+{{define "content"}}<form method="post" action="/login" class="panel space-y-4 p-5">
+<h1 class="text-base font-semibold">Sign in</h1>
+{{with .Data.Error}}<p class="alert-error" role="alert">{{.}}</p>{{end}}
+<input type="hidden" name="next" value="{{.Data.Next}}">
+<label class="block"><span class="lbl">Login</span>
+<input class="input mt-1" name="login" value="{{.Data.Login}}" autocomplete="username" maxlength="256" required autofocus></label>
+<label class="block"><span class="lbl">Password</span>
+<input class="input mt-1" type="password" name="password" autocomplete="current-password" maxlength="72" required></label>
+<button type="submit" class="btn btn-primary w-full justify-center">Sign in</button>
+</form>{{end}}

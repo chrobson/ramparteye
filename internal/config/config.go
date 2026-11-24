@@ -42,6 +42,11 @@ type Config struct {
 	Unstable       UnstableConfig
 	TickEvery      time.Duration // RAMPART_TICK_EVERY, scheduler tick, default 1m
 
+	// TrustedProxies are reverse proxies whose X-Forwarded-For is believed
+	// for the client address (RAMPART_TRUSTED_PROXIES, CIDRs or IPs; empty =
+	// the header is ignored).
+	TrustedProxies []netip.Prefix
+
 	// AllowHosts are host names from RAMPART_ALLOW_HOSTS. Load does not
 	// resolve them; call ResolveAllowHosts to turn them into prefixes.
 	AllowHosts []string
@@ -159,6 +164,9 @@ func Load(env func(string) string) (Config, error) {
 	var err error
 	if c.AllowedCIDRs, err = ParsePrefixes(env("RAMPART_ALLOWED_CIDRS")); err != nil {
 		return c, fmt.Errorf("RAMPART_ALLOWED_CIDRS: %w", err)
+	}
+	if c.TrustedProxies, err = ParsePrefixes(env("RAMPART_TRUSTED_PROXIES")); err != nil {
+		return c, fmt.Errorf("RAMPART_TRUSTED_PROXIES: %w", err)
 	}
 	for _, h := range strings.Split(env("RAMPART_ALLOW_HOSTS"), ",") {
 		if h = strings.TrimSpace(h); h != "" {

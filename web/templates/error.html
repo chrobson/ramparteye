@@ -1,0 +1,7 @@
+{{define "title"}}{{.Data.Title}}{{end}}
+{{define "content"}}<section class="panel mx-auto max-w-lg p-6 text-center">
+<p class="font-mono text-3xl font-bold text-brand-fg">{{.Data.Code}}</p>
+<h1 class="mt-2 text-lg font-semibold">{{.Data.Title}}</h1>
+<p class="mt-1 text-muted">{{.Data.Text}}</p>
+<a class="btn mt-4" href="/">Back to the dashboard</a>
+</section>{{end}}

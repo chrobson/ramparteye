@@ -264,3 +264,26 @@ func TestConfigRedactsSecrets(t *testing.T) {
 	}
 	assert.True(t, strings.Contains(fmt.Sprintf("%+v", c), ":1"))
 }
+
+func TestLoadTrustedProxies(t *testing.T) {
+	cfg, err := Load(envMap(map[string]string{"RAMPART_TRUSTED_PROXIES": "10.0.0.1, 172.16.0.0/12"}))
+
+	assert.NoError(t, err)
+	assert.Equal(t, []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.1/32"),
+		netip.MustParsePrefix("172.16.0.0/12"),
+	}, cfg.TrustedProxies)
+}
+
+func TestLoadTrustedProxiesDefaultNone(t *testing.T) {
+	cfg, err := Load(envMap(nil))
+
+	assert.NoError(t, err)
+	assert.Len(t, 0, cfg.TrustedProxies)
+}
+
+func TestLoadInvalidTrustedProxies(t *testing.T) {
+	_, err := Load(envMap(map[string]string{"RAMPART_TRUSTED_PROXIES": "nope"}))
+
+	assert.ErrorContain(t, "RAMPART_TRUSTED_PROXIES", err)
+}

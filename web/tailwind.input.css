@@ -1,3 +1,171 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-bg font-sans text-sm text-fg antialiased;
+  }
+  b, strong {
+    @apply font-semibold;
+  }
+}
+
+@layer components {
+  /* Brand mark: the watchful eye. */
+  .eye {
+    @apply relative inline-block h-3 w-[18px] shrink-0 rounded-full bg-brand;
+    box-shadow: 0 0 9px rgb(var(--c-brand));
+  }
+  .eye::after {
+    @apply absolute left-1.5 top-px h-2.5 w-1.5 rounded-full bg-bg;
+    content: "";
+  }
+
+  .sidebar {
+    @apply flex shrink-0 flex-col border-b border-line bg-side px-2 py-3 md:w-52 md:border-b-0 md:border-r;
+  }
+  .nav-group {
+    @apply hidden px-2 pb-1 pt-4 text-[10px] uppercase tracking-widest text-dim md:block;
+  }
+  .nav-item {
+    @apply block rounded border-l-2 border-transparent px-2 py-1.5 text-fg/90 hover:bg-panel;
+  }
+  .nav-item[aria-current="page"] {
+    @apply border-brand bg-brand-bg text-brand-fg;
+  }
+
+  .topbar {
+    @apply flex flex-wrap items-center gap-2 border-b border-line px-4 py-2;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 whitespace-nowrap rounded border border-edge px-2 py-0.5 text-xs;
+  }
+  .chip-ok {
+    @apply border-ok-line text-ok;
+  }
+  .chip-bad {
+    @apply border-bad-line text-bad;
+  }
+  .chip-off {
+    @apply text-muted;
+  }
+  a.chip:hover {
+    @apply bg-panel;
+  }
+
+  .menu {
+    @apply relative;
+  }
+  .menu > summary {
+    @apply list-none;
+  }
+  .menu > summary::-webkit-details-marker {
+    display: none;
+  }
+  .menu-body {
+    @apply absolute right-0 z-20 mt-1 w-44 rounded-md border border-line bg-panel p-1 shadow-lg;
+  }
+  .menu-item {
+    @apply block rounded px-2 py-1.5 text-sm hover:bg-row;
+  }
+
+  .page-title {
+    @apply text-lg font-bold;
+  }
+  .panel {
+    @apply rounded-md border border-line bg-panel p-3;
+  }
+  .lbl {
+    @apply text-[10px] uppercase tracking-widest text-muted;
+  }
+  .stat {
+    @apply flex flex-col gap-1 rounded-md border border-line bg-panel p-3;
+  }
+  .stat-value {
+    @apply font-mono text-xl;
+  }
+  .empty {
+    @apply px-4 py-8 text-center text-muted;
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-1.5 rounded border border-edge px-3 py-1.5 text-sm text-fg hover:bg-row disabled:opacity-50;
+  }
+  .btn-sm {
+    @apply px-2 py-0.5 text-xs;
+  }
+  .btn-primary {
+    @apply border-brand bg-brand text-white hover:bg-brand/90;
+  }
+  .input {
+    @apply w-full rounded border border-edge bg-field px-2 py-1.5 font-mono text-sm text-fg focus:border-brand focus:outline-none;
+  }
+  .alert-error {
+    @apply rounded border border-bad-line bg-gone-bg px-3 py-2 text-bad;
+  }
+
+  .tbl {
+    @apply w-full border-collapse text-left;
+  }
+  .tbl th {
+    @apply border-b border-row px-2 py-1.5 text-[10px] font-normal uppercase tracking-wider text-muted;
+  }
+  .tbl td {
+    @apply border-b border-row px-2 py-1.5 align-top;
+  }
+  .cell-more > summary {
+    @apply cursor-pointer list-none;
+  }
+  .cell-full {
+    @apply mt-1 max-w-prose whitespace-pre-wrap break-all rounded bg-field p-2 font-mono text-xs;
+  }
+
+  .sev {
+    @apply inline-block rounded px-1.5 py-px text-[10px] font-bold;
+  }
+  .sev-crit {
+    @apply bg-crit-bg text-crit;
+  }
+  .sev-high {
+    @apply bg-high-bg text-high;
+  }
+  .sev-med {
+    @apply bg-med-bg text-med;
+  }
+  .sev-low {
+    @apply bg-low-bg text-low;
+  }
+  .sev-info {
+    @apply bg-info-bg text-info;
+  }
+  .score {
+    @apply rounded bg-score-bg px-1 font-mono font-bold text-score;
+  }
+  .tag {
+    @apply ml-1 inline-block rounded px-1.5 py-px text-[10px];
+  }
+  .tag-new,
+  .tag-up {
+    @apply bg-new-bg text-new;
+  }
+  .tag-gone {
+    @apply bg-gone-bg text-gone;
+  }
+  .tag-changed {
+    @apply bg-info-bg text-fg;
+  }
+  .tag-flap {
+    @apply bg-med-bg text-med;
+  }
+
+  .confirm {
+    @apply w-full max-w-md rounded-md border border-line bg-panel p-5 text-fg;
+  }
+  .confirm::backdrop {
+    background: rgb(0 0 0 / 0.6);
+  }
+  [data-tab][aria-selected="true"] {
+    @apply border-b-2 border-brand text-brand-fg;
+  }
+}

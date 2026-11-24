@@ -135,3 +135,16 @@ func TestExcludedReturnsCopy(t *testing.T) {
 	got[0] = netip.MustParseAddr("10.20.0.2")
 	assert.Equal(t, []netip.Addr{ex}, s.Excluded())
 }
+
+func TestAllowedReturnsNormalisedCopy(t *testing.T) {
+	s := mustNew(t, []netip.Prefix{netip.MustParsePrefix("10.20.1.7/18")},
+		[]netip.Addr{netip.MustParseAddr("::ffff:192.0.2.9")}, nil)
+
+	got := s.Allowed()
+	got[0] = netip.MustParsePrefix("0.0.0.0/0")
+
+	assert.Equal(t, []netip.Prefix{
+		netip.MustParsePrefix("10.20.0.0/18"),
+		netip.MustParsePrefix("192.0.2.9/32"),
+	}, s.Allowed())
+}

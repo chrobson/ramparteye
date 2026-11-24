@@ -1,0 +1,2 @@
+{{/* Stat card. Data: dict "Label" "Value" ["Sub"] ["Warn" bool]. */}}
+{{define "stat"}}<div class="stat"><span class="lbl">{{.Label}}</span><b class="stat-value{{if .Warn}} text-brand-fg{{end}}">{{.Value}}</b>{{with .Sub}}<span class="text-xs text-muted">{{.}}</span>{{end}}</div>{{end}}

@@ -1,0 +1,2 @@
+{{/* Empty state. Data: dict "Title" ["Text"] ["Href" "Link"]. */}}
+{{define "empty"}}<div class="empty"><p class="font-semibold text-fg">{{.Title}}</p>{{with .Text}}<p class="mt-1">{{.}}</p>{{end}}{{if .Href}}<a class="btn mt-3" href="{{.Href}}">{{.Link}}</a>{{end}}</div>{{end}}

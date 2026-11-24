@@ -1,0 +1,43 @@
+{{/* App shell (sidebar, top bar) and the bare layout for pages without a session. */}}
+{{define "layout"}}<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body class="min-h-screen">
+<div class="flex min-h-screen flex-col md:flex-row">
+{{template "sidebar" .Shell}}
+<div class="flex min-w-0 flex-1 flex-col">
+{{template "topbar" .}}
+<main id="main" class="flex-1 p-4 lg:p-6">
+{{template "content" .}}
+</main>
+</div>
+</div>
+{{template "confirm-dialog"}}
+</body>
+</html>
+{{end}}
+
+{{define "bare"}}<!doctype html>
+<html lang="en">
+<head>{{template "head" .}}</head>
+<body class="min-h-screen">
+<main class="flex min-h-screen items-center justify-center p-4">
+<div class="w-full max-w-md">
+<div class="mb-6 flex items-center justify-center gap-2 text-lg font-bold"><span class="eye" aria-hidden="true"></span>RampartEye</div>
+{{template "content" .}}
+</div>
+</main>
+</body>
+</html>
+{{end}}
+
+{{define "head"}}<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+<title>{{template "title" .}} · RampartEye</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="{{asset "app.css"}}">
+<script src="{{asset "app.js"}}"></script>
+<script src="{{asset "htmx.min.js"}}" defer></script>
+<script src="{{asset "htmx-sse.js"}}" defer></script>
+{{end}}

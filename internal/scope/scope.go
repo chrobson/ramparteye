@@ -140,6 +140,10 @@ func normPrefix(p netip.Prefix) netip.Prefix {
 // (such as DNS lookups) that would be refused anyway.
 func (s Scope) Empty() bool { return len(s.allowed) == 0 }
 
+// Allowed returns a copy of the allowed prefixes (single hosts as /32 or
+// /128), normalised, in the order given to New.
+func (s Scope) Allowed() []netip.Prefix { return slices.Clone(s.allowed) }
+
 // Excluded returns a copy of the excluded addresses. Scanners pass them to
 // nmap as exclusions.
 func (s Scope) Excluded() []netip.Addr { return slices.Clone(s.exclude) }

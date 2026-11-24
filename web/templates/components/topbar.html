@@ -1,0 +1,21 @@
+{{/* Top bar: scan and DefectDojo chips, safety strip, cancel all, theme, user. Data: View. */}}
+{{define "topbar"}}{{$s := .Shell}}<header class="topbar">
+{{template "chip" $s.ScanChip}}
+{{template "chip" $s.DojoChip}}
+<span class="chip chip-off md:ml-auto"{{with $s.Safety.ScopeAll}} title="Scan scope: {{.}}"{{end}}>
+{{- if $s.Safety.Scope}}scope <b class="font-semibold text-fg">{{$s.Safety.Scope}}</b>{{else}}<b class="font-semibold text-bad">no scope set</b>, scans refused{{end}}
+ · limit <b class="font-semibold text-fg">{{num $s.Safety.PPS}} pps</b> · <b class="font-semibold text-fg">{{$s.Safety.Methods}} only</b></span>
+{{- if can .Ctx "scans.run"}}
+<form method="post" action="/scans/cancel-all" data-confirm="Cancel every running and queued scan? Running nmap processes are stopped and the runs end as cancelled." data-confirm-ok="Cancel all scans">
+<button type="submit" class="btn btn-sm"><span aria-hidden="true" class="text-bad">■</span> Cancel all scans</button>
+</form>
+{{- end}}
+<button id="theme-toggle" type="button" class="btn btn-sm" title="Switch light / dark theme" aria-label="Switch light / dark theme">◐</button>
+<details class="menu">
+<summary class="chip chip-off cursor-pointer">{{$s.User}} · {{$s.Role}}</summary>
+<div class="menu-body">
+<a class="menu-item" href="/account/password">Change password</a>
+<form method="post" action="/logout"><button type="submit" class="menu-item w-full text-left">Sign out</button></form>
+</div>
+</details>
+</header>{{end}}

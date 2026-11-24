@@ -1,0 +1,3 @@
+{{/* Tables use class "tbl". "cell" shows a possibly long, untrusted value:
+     truncated to Max runes, with the full value in a <details>. Data: dict "Value" "Max". */}}
+{{define "cell"}}{{$c := cellOf .Value .Max}}{{if $c.Truncated}}<details class="cell-more"><summary title="Show the full value">{{$c.Short}}…</summary><div class="cell-full">{{$c.Full}}</div></details>{{else}}{{$c.Full}}{{end}}{{end}}
