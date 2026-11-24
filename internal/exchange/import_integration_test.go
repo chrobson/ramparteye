@@ -4,6 +4,7 @@ package exchange
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
@@ -191,4 +192,21 @@ func count(t *testing.T, pool *pgxpool.Pool, table string) int {
 	var n int
 	must.Nil(pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&n))
 	return n
+}
+
+func TestStoreCapsReportErrorsAndDedupesZones(t *testing.T) {
+	pool := testdb.New(t)
+	obs := Observations{ErrorsTruncated: 5}
+	for i := range 150 {
+		obs.Errors = append(obs.Errors, fmt.Sprint("e", i))
+	}
+	obs.Hosts = []model.HostObs{{IP: netip.MustParseAddr("10.20.0.5"), Up: true},
+		{IP: netip.MustParseAddr("fe80::1%eth0")}, {IP: netip.MustParseAddr("fe80::1%eth1")}}
+
+	_, rep, err := storeObs(t, pool, obs, labScope(t))
+
+	assert.NoError(t, err)
+	assert.Len(t, 100, rep.Errors)
+	assert.Equal(t, 56, rep.ErrorsTruncated) // 50 over + 5 + the dropped-host message
+	assert.Equal(t, 1, rep.Dropped) // both zones are one address
 }

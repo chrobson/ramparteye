@@ -214,3 +214,73 @@ func sortedKeys(m map[string]json.RawMessage) []string {
 	sort.Strings(ks)
 	return ks
 }
+
+// StripUnknownKeys removes top-level, finding and endpoint keys outside the
+// RampartEye whitelist and returns the sorted names of the removed keys, so
+// a file from another tool can be imported while only structural problems
+// fail Validate. Input that is not the expected JSON shape is returned
+// unchanged for Validate to report.
+func StripUnknownKeys(b []byte) ([]byte, []string) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var top map[string]json.RawMessage
+	if err := dec.Decode(&top); err != nil {
+		return b, nil
+	}
+	ignored := map[string]bool{}
+	for k := range top {
+		if k != "findings" {
+			ignored[k] = true
+			delete(top, k)
+		}
+	}
+	var findings []map[string]json.RawMessage
+	if err := json.Unmarshal(top["findings"], &findings); err != nil {
+		return b, nil
+	}
+	for _, f := range findings {
+		for k := range f {
+			if !allowedFindingKeys[k] {
+				ignored[k] = true
+				delete(f, k)
+			}
+		}
+		var eps []json.RawMessage
+		if json.Unmarshal(f["endpoints"], &eps) != nil {
+			continue
+		}
+		for i, raw := range eps {
+			var ep map[string]json.RawMessage
+			if json.Unmarshal(raw, &ep) != nil {
+				continue
+			}
+			for k := range ep {
+				if !allowedEndpointKeys[k] {
+					ignored[k] = true
+					delete(ep, k)
+				}
+			}
+			if nb, err := json.Marshal(ep); err == nil {
+				eps[i] = nb
+			}
+		}
+		if nb, err := json.Marshal(eps); err == nil {
+			f["endpoints"] = nb
+		}
+	}
+	top["findings"], _ = json.Marshal(findings)
+	out, err := json.Marshal(top)
+	if err != nil {
+		return b, nil
+	}
+	return out, sortedKeys2(ignored)
+}
+
+func sortedKeys2(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}

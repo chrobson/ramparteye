@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/chrobson/ramparteye/internal/dojo"
 	"github.com/chrobson/ramparteye/internal/model"
@@ -241,7 +242,9 @@ func WriteCSV(w io.Writer, s Snapshot) error {
 }
 
 // safeCell neutralises spreadsheet formula injection and replaces invalid
-// UTF-8 in text that comes from scanned hosts.
+// UTF-8 in text that comes from scanned hosts. Spreadsheets skip leading
+// whitespace and control characters before reading a formula, so the first
+// character that is neither decides, as does the very first byte.
 func safeCell(s string) string {
 	s = strings.ToValidUTF8(s, "\uFFFD")
 	if s == "" {
@@ -250,6 +253,15 @@ func safeCell(s string) string {
 	switch s[0] {
 	case '=', '+', '-', '@', '\t', '\r':
 		return "'" + s
+	}
+	for _, r := range s {
+		if unicode.IsSpace(r) || unicode.IsControl(r) || r == '\u00a0' {
+			continue
+		}
+		if r == '=' || r == '+' || r == '-' || r == '@' {
+			return "'" + s
+		}
+		break
 	}
 	return s
 }

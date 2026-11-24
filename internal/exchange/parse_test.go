@@ -184,3 +184,52 @@ func TestExportImportRoundTrip(t *testing.T) {
 	assert.Equal(t, 90, apache.Confidence)
 	assert.Equal(t, "Apache", apache.Name)
 }
+
+func TestParseGenericIgnoresUnknownKeys(t *testing.T) {
+	doc := `{"scan_type":"x","findings":[{"title":"Open 22","severity":"Info","description":"d",` +
+		`"active":true,"verified":false,"false_p":false,"duplicate":false,"out_of_scope":false,` +
+		`"risk_accepted":false,"unique_id_from_tool":"u1","endpoints":[{"host":"10.20.0.5","port":22,` +
+		`"protocol":"tcp","extra":1}]}]}`
+
+	f, obs, err := Parse([]byte(doc))
+
+	assert.NoError(t, err)
+	assert.Equal(t, FormatGeneric, f)
+	assert.Len(t, 1, obs.Services)
+	assert.Equal(t, []string{"ignored unsupported keys: active, duplicate, extra, false_p, out_of_scope, " +
+		"risk_accepted, scan_type, verified"}, obs.Warnings)
+}
+
+func TestParseGenericStillFailsStructure(t *testing.T) {
+	_, _, err := Parse([]byte(`{"findings":[{"title":"t","active":true}]}`))
+
+	assert.Error(t, err)
+}
+
+func TestParseCapsErrors(t *testing.T) {
+	var fs []model.Finding
+	for range 250 {
+		fs = append(fs, model.Finding{Title: "x", Severity: model.SevInfo, Description: "d"})
+	}
+
+	obs := FromFindings(fs)
+
+	assert.Len(t, 100, obs.Errors)
+	assert.Equal(t, 150, obs.ErrorsTruncated)
+}
+
+func TestParseTooManyEndpoints(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"findings":[{"title":"t","severity":"Info","description":"d","unique_id_from_tool":"u","endpoints":[`)
+	for i := 0; i <= MaxItems; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"host":"10.0.0.1","port":80}`)
+	}
+	b.WriteString(`]}]}`)
+
+	_, _, err := Parse([]byte(b.String()))
+
+	assert.ErrorIs(t, ErrTooManyItems, err)
+}

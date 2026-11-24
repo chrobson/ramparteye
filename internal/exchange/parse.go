@@ -22,6 +22,11 @@ const (
 	// MaxImportSize caps an uploaded import file (kept in memory only).
 	MaxImportSize = 32 << 20
 
+	// MaxItems caps the hosts, services and endpoints of one import.
+	MaxItems = 100000
+	// maxParseErrors caps the messages kept in Observations.Errors.
+	maxParseErrors = 100
+
 	maxField        = scan.MaxFieldBytes // text taken from an imported file
 	maxEvidence     = 32                 // evidence entries kept per detection
 	maxEvidenceKey  = 64
@@ -43,6 +48,9 @@ var (
 	ErrUnknownFormat = errors.New("unknown import format: expected nmap XML or DefectDojo Generic Findings JSON")
 	// ErrTooLarge is returned for a file larger than MaxImportSize.
 	ErrTooLarge = fmt.Errorf("import file is larger than %d MiB", MaxImportSize>>20)
+	// ErrTooManyItems is returned for a file with more than MaxItems hosts,
+	// services or endpoints.
+	ErrTooManyItems = fmt.Errorf("import file has more than %d hosts, services or endpoints", MaxItems)
 )
 
 // Observations is the parsed content of an import file.
@@ -51,6 +59,18 @@ type Observations struct {
 	Services   []model.ServiceObs
 	Detections []ImportedDetection
 	Errors     []string
+	// ErrorsTruncated counts the messages beyond maxParseErrors.
+	ErrorsTruncated int
+	// Warnings are notes about the file (e.g. ignored keys), not failures.
+	Warnings []string
+}
+
+func (o *Observations) addError(msg string) {
+	if len(o.Errors) < maxParseErrors {
+		o.Errors = append(o.Errors, msg)
+		return
+	}
+	o.ErrorsTruncated++
 }
 
 // ImportedDetection is a detection attached to a service by asset key.
@@ -85,16 +105,33 @@ func Parse(b []byte) (Format, Observations, error) {
 		if err != nil {
 			return f, Observations{}, err
 		}
+		if len(res.Hosts) > MaxItems || len(res.Services) > MaxItems {
+			return f, Observations{}, ErrTooManyItems
+		}
 		return f, Observations{Hosts: res.Hosts, Services: res.Services}, nil
 	case FormatGeneric:
-		if err := dojo.Validate(b); err != nil {
+		// Keys other than RampartEye's whitelist (active, verified, ...) are
+		// ignored; only structural and required-field errors fail.
+		clean, ignored := dojo.StripUnknownKeys(b)
+		if err := dojo.Validate(clean); err != nil {
 			return f, Observations{}, fmt.Errorf("invalid Generic Findings file: %w", err)
 		}
-		fs, err := dojo.NewCodec().Unmarshal(b)
+		fs, err := dojo.NewCodec().Unmarshal(clean)
 		if err != nil {
 			return f, Observations{}, err
 		}
-		return f, FromFindings(fs), nil
+		n := 0
+		for _, x := range fs {
+			n += len(x.Endpoints)
+		}
+		if n > MaxItems {
+			return f, Observations{}, ErrTooManyItems
+		}
+		obs := FromFindings(fs)
+		if len(ignored) > 0 {
+			obs.Warnings = append(obs.Warnings, "ignored unsupported keys: "+strings.Join(ignored, ", "))
+		}
+		return f, obs, nil
 	}
 	return FormatUnknown, Observations{}, ErrUnknownFormat
 }
@@ -168,7 +205,7 @@ func FromFindings(fs []model.Finding) Observations {
 			}
 		}
 		if len(f.Endpoints) == 0 {
-			obs.Errors = append(obs.Errors, fmt.Sprintf("finding %d (%q): no endpoints, skipped", i, title))
+			obs.addError(fmt.Sprintf("finding %d (%q): no endpoints, skipped", i, title))
 			continue
 		}
 		fields, evidence := parseObserved(f.Observed)
@@ -176,7 +213,7 @@ func FromFindings(fs []model.Finding) Observations {
 			if !k.IP.IsValid() {
 				ip, port, ok := dojo.ParseUniqueID(f.UniqueIDFromTool)
 				if !ok {
-					obs.Errors = append(obs.Errors, fmt.Sprintf("finding %d (%q): host %q is not an IP address, skipped",
+					obs.addError(fmt.Sprintf("finding %d (%q): host %q is not an IP address, skipped",
 						i, title, clip(k.VHost, 128)))
 					continue
 				}
@@ -192,7 +229,7 @@ func FromFindings(fs []model.Finding) Observations {
 			k.Proto = strings.ToLower(k.Proto)
 			k.VHost = clip(k.VHost, maxField)
 			if k.Port == 0 || !knownProtos[k.Proto] {
-				obs.Errors = append(obs.Errors, fmt.Sprintf("finding %d (%q): endpoint without a usable port or protocol, skipped", i, title))
+				obs.addError(fmt.Sprintf("finding %d (%q): endpoint without a usable port or protocol, skipped", i, title))
 				continue
 			}
 			addHost(k.IP, fields["Hostname"])

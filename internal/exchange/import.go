@@ -30,15 +30,17 @@ type Report struct {
 	Detections int      `json:"detections"`
 	Dropped    int      `json:"dropped"` // hosts outside the scope, not imported
 	Errors     []string `json:"errors"`
+	// ErrorsTruncated counts messages beyond the first maxReportErrors.
+	ErrorsTruncated int      `json:"errors_truncated"`
+	Warnings        []string `json:"warnings"`
 }
 
 func (r *Report) addError(msg string) {
-	switch {
-	case len(r.Errors) < maxReportErrors:
+	if len(r.Errors) < maxReportErrors {
 		r.Errors = append(r.Errors, msg)
-	case len(r.Errors) == maxReportErrors:
-		r.Errors = append(r.Errors, "further messages omitted")
+		return
 	}
+	r.ErrorsTruncated++
 }
 
 // Store writes obs as a new import run inside tx and returns its id.
@@ -53,6 +55,8 @@ func Store(ctx context.Context, tx pgx.Tx, obs Observations, s scope.Scope, rep 
 	for _, e := range obs.Errors {
 		rep.addError(e)
 	}
+	rep.ErrorsTruncated += obs.ErrorsTruncated
+	rep.Warnings = append(rep.Warnings, obs.Warnings...)
 	obs = filterScope(obs, s, rep)
 	if len(obs.Hosts) == 0 {
 		return 0, ErrNothingToImport
@@ -103,6 +107,7 @@ func filterScope(obs Observations, s scope.Scope, rep *Report) Observations {
 	out := Observations{}
 	dropped := map[netip.Addr]bool{}
 	ok := func(ip netip.Addr) bool {
+		ip = ip.WithZone("").Unmap()
 		if s.Allows(ip) {
 			return true
 		}
@@ -154,7 +159,8 @@ func Import(ctx context.Context, db store.DBTX, b []byte, s scope.Scope, cfg dif
 		return nil
 	})
 	if err != nil {
-		return Report{Format: format, Dropped: rep.Dropped, Errors: rep.Errors}, err
+		rep.RunID, rep.Hosts, rep.Services, rep.Detections = 0, 0, 0, 0
+		return Report{Format: format, Dropped: rep.Dropped, Errors: rep.Errors, ErrorsTruncated: rep.ErrorsTruncated, Warnings: rep.Warnings}, err
 	}
 	return rep, nil
 }
