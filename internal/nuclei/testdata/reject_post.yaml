@@ -1,0 +1,8 @@
+id: post
+info: {name: x, severity: info}
+http:
+  - method: POST
+    path: ["{{BaseURL}}/x"]
+    matchers:
+      - type: status
+        status: [200]

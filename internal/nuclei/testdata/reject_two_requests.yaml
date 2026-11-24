@@ -1,0 +1,11 @@
+id: two
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/a"]
+    matchers:
+      - type: status
+        status: [200]
+  - path: ["{{BaseURL}}/b"]
+    matchers:
+      - type: status
+        status: [200]

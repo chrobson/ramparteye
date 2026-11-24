@@ -1,0 +1,9 @@
+id: dsl
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    matchers-condition: and
+    matchers:
+      - type: dsl
+        dsl:
+          - 'status_code == 200 && contains(body, "x")'

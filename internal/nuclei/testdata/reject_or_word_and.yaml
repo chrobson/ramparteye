@@ -1,0 +1,11 @@
+id: mix
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    matchers-condition: or
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        words: [a, b]
+        condition: and

@@ -1,0 +1,9 @@
+id: alias
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    matchers: &m
+      - type: status
+        status: [200]
+  - path: ["{{BaseURL}}/y"]
+    matchers: *m

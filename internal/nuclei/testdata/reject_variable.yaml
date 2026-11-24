@@ -1,0 +1,7 @@
+id: var
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/{{randstr}}"]
+    matchers:
+      - type: status
+        status: [200]

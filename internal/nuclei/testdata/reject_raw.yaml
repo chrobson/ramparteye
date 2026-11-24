@@ -1,0 +1,10 @@
+id: raw
+info: {name: x, severity: info}
+http:
+  - raw:
+      - |
+        GET /x HTTP/1.1
+        Host: {{Hostname}}
+    matchers:
+      - type: status
+        status: [200]

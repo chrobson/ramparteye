@@ -1,0 +1,10 @@
+id: two-words
+info:
+  name: Two words
+  severity: high
+http:
+  - path: ["{{BaseURL}}/"]
+    matchers:
+      - type: word
+        words: ["alpha", "beta"]
+        condition: and

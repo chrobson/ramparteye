@@ -1,0 +1,5 @@
+id: c
+info: {name: x, severity: info}
+code:
+  - engine: [sh]
+    source: id

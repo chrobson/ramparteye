@@ -1,0 +1,7 @@
+id: cost
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    matchers:
+      - type: regex
+        regex: ['(a{100}){100}']

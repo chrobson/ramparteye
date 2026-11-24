@@ -1,0 +1,9 @@
+id: payloads
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/{{p}}"]
+    payloads:
+      p: [a, b]
+    matchers:
+      - type: status
+        status: [200]

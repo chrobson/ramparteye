@@ -1,0 +1,6 @@
+id: net
+info: {name: x, severity: info}
+network:
+  - inputs:
+      - data: "hi"
+    host: ["{{Hostname}}"]

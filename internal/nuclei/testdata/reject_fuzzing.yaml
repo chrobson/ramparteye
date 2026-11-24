@@ -1,0 +1,9 @@
+id: fuzz
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    fuzzing:
+      - part: query
+    matchers:
+      - type: status
+        status: [200]

@@ -1,0 +1,10 @@
+id: oob
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    headers:
+      Accept: "{{interactsh-url}}"
+    matchers:
+      - type: word
+        part: interactsh_protocol
+        words: [http]

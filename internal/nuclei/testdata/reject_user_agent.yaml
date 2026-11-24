@@ -1,0 +1,9 @@
+id: ua
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    headers:
+      User-Agent: evil
+    matchers:
+      - type: status
+        status: [200]

@@ -1,0 +1,12 @@
+id: head-probe
+info:
+  name: Head probe
+  severity: info
+http:
+  - method: HEAD
+    path: ["{{BaseURL}}/status?full=1"]
+    headers:
+      Accept: text/html
+    matchers:
+      - type: status
+        status: [200]

@@ -1,0 +1,8 @@
+id: negstatus
+info: {name: x, severity: info}
+http:
+  - path: ["{{BaseURL}}/x"]
+    matchers:
+      - type: status
+        status: [404]
+        negative: true

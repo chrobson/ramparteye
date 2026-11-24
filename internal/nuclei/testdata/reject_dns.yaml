@@ -1,0 +1,5 @@
+id: d
+info: {name: x, severity: info}
+dns:
+  - name: "{{FQDN}}"
+    type: A

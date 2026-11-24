@@ -1,0 +1,23 @@
+id: grafana-login
+info:
+  name: Grafana Login
+  severity: bogus
+  classification:
+    cwe-id: [CWE-200, "CWE-306"]
+http:
+  - path:
+      - "{{RootURL}}/login"
+    stop-at-first-match: true
+    matchers-condition: and
+    matchers:
+      - type: regex
+        part: body
+        regex:
+          - '<title>Grafana</title>'
+          - 'grafana-app'
+      - type: regex
+        part: header
+        regex:
+          - '(?i)content-type:\s*text/html'
+      - type: status
+        status: [200, 302]

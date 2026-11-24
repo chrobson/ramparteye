@@ -1,0 +1,28 @@
+id: apache-server-status-exposed
+info:
+  name: Apache Server Status Exposed
+  author: someone
+  severity: medium
+  description: The /server-status page is publicly reachable.
+  remediation: Restrict /server-status to monitoring addresses.
+  reference:
+    - https://httpd.apache.org/docs/2.4/mod/mod_status.html
+    - not-a-url
+  classification:
+    cwe-id: CWE-200
+  tags: exposure,apache
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/server-status"
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - "Apache Server Status"
+          - "Server Version"
+        condition: or

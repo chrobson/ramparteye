@@ -1,0 +1,14 @@
+id: no-csp
+info:
+  name: Missing marker
+  severity: low
+http:
+  - path: ["{{BaseURL}}"]
+    matchers-condition: and
+    matchers:
+      - type: status
+        status: [200]
+      - type: word
+        part: body
+        words: ["login"]
+        negative: true

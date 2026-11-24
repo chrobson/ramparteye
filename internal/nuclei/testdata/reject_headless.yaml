@@ -1,0 +1,5 @@
+id: hl
+info: {name: x, severity: info}
+headless:
+  - steps:
+      - action: navigate
