@@ -264,6 +264,7 @@ func (n *Nmap) vet(argv []string) ([]netip.Prefix, error) {
 		ops          []string
 		excl         []netip.Addr
 		sawN, sawOut bool
+		seen         = map[string]bool{}
 	)
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
@@ -282,6 +283,12 @@ func (n *Nmap) vet(argv []string) ([]netip.Prefix, error) {
 			}
 			i++
 			v := argv[i]
+			// nmap honours only the last occurrence of a valued option, so a
+			// repeat could hide an earlier, vetted value.
+			if seen[a] {
+				return nil, fmt.Errorf("%w: repeated %s", ErrDisallowedArg, a)
+			}
+			seen[a] = true
 			switch a {
 			case "--max-rate", "--top-ports", "--version-intensity":
 				if x, err := strconv.Atoi(v); err != nil || x <= 0 {
