@@ -124,3 +124,14 @@ func TestNewRejectsInvalidInputs(t *testing.T) {
 	_, err = New(nil, []netip.Addr{{}}, nil)
 	assert.Error(t, err)
 }
+
+func TestExcludedReturnsCopy(t *testing.T) {
+	ex := netip.MustParseAddr("10.20.0.1")
+	s := mustNew(t, []netip.Prefix{netip.MustParsePrefix("10.20.0.0/24")}, nil, []netip.Addr{ex})
+
+	got := s.Excluded()
+	assert.Equal(t, []netip.Addr{ex}, got)
+
+	got[0] = netip.MustParseAddr("10.20.0.2")
+	assert.Equal(t, []netip.Addr{ex}, s.Excluded())
+}

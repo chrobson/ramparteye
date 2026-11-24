@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<?xml-stylesheet href="file:///usr/bin/../share/nmap/nmap.xsl" type="text/xsl"?>
+<!-- Nmap 7.95 scan initiated Sat Nov 21 15:01:49 2026 as: nmap -sn -n -PE -PS21,22,23,25,53,80,110,143,443,445,1883,3306,3389,5432,8080,8443 -PA80,443 -oX - 10.20.0.0/18 -->
+<nmaprun scanner="nmap" args="nmap -sn -n -PE -PS21,22,23,25,53,80,110,143,443,445,1883,3306,3389,5432,8080,8443 -PA80,443 -oX - 10.20.0.0/18" start="1795273309" startstr="Sat Nov 21 15:01:49 2026" version="7.95" xmloutputversion="1.05">
+<verbose level="0"/>
+<debugging level="0"/>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.0.0" addrtype="ipv4"/>
+<address addr="1A:B2:2A:28:97:E8" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="345" rttvar="1722" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.0.1" addrtype="ipv4"/>
+<address addr="1A:B2:2A:28:97:E8" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="60" rttvar="3815" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.0.10" addrtype="ipv4"/>
+<address addr="42:89:D9:72:AE:47" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="81" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.0.11" addrtype="ipv4"/>
+<address addr="7E:3E:5F:B4:24:7D" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="73" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.1.20" addrtype="ipv4"/>
+<address addr="52:5E:9C:BF:C8:68" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="114" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.1.21" addrtype="ipv4"/>
+<address addr="3A:C9:A4:98:D6:77" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="221" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.1.30" addrtype="ipv4"/>
+<address addr="D2:22:F2:EF:19:9B" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="96" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.2.40" addrtype="ipv4"/>
+<address addr="B2:65:0E:3A:5C:60" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="52" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.3.50" addrtype="ipv4"/>
+<address addr="96:7D:84:01:12:20" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="78" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.4.60" addrtype="ipv4"/>
+<address addr="22:95:53:3D:E7:7E" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="155" rttvar="2242" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.5.70" addrtype="ipv4"/>
+<address addr="8E:70:DB:36:B5:1B" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="83" rttvar="3800" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.6.80" addrtype="ipv4"/>
+<address addr="FE:0B:42:50:AD:76" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="61" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.7.90" addrtype="ipv4"/>
+<address addr="FE:94:A2:36:F8:2B" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="205" rttvar="3771" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.8.100" addrtype="ipv4"/>
+<address addr="82:88:09:8E:C8:54" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="159" rttvar="1276" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.9.110" addrtype="ipv4"/>
+<address addr="EE:4A:03:79:B3:E4" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="66" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.10.120" addrtype="ipv4"/>
+<address addr="7A:58:28:6F:80:DA" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="265" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.11.130" addrtype="ipv4"/>
+<address addr="92:A7:89:F3:A0:B4" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="118" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.12.140" addrtype="ipv4"/>
+<address addr="B6:D1:DE:03:AA:4D" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="223" rttvar="296" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.16.10" addrtype="ipv4"/>
+<address addr="26:9C:81:79:A3:51" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="157" rttvar="2198" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.16.11" addrtype="ipv4"/>
+<address addr="22:F2:DB:80:15:DE" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="234" rttvar="1304" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.20.20" addrtype="ipv4"/>
+<address addr="B6:A7:5A:E1:E7:7C" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="93" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.20.21" addrtype="ipv4"/>
+<address addr="5E:98:03:C2:94:57" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="103" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.24.30" addrtype="ipv4"/>
+<address addr="A6:3A:76:AF:72:3C" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="384" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.28.40" addrtype="ipv4"/>
+<address addr="3A:E1:0B:2F:54:D2" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="311" rttvar="79" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.32.50" addrtype="ipv4"/>
+<address addr="CE:61:7B:0E:3E:E1" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="164" rttvar="3780" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.40.70" addrtype="ipv4"/>
+<address addr="F2:2F:33:27:B2:00" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="106" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.44.80" addrtype="ipv4"/>
+<address addr="7E:22:6C:57:F0:11" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="288" rttvar="146" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.48.90" addrtype="ipv4"/>
+<address addr="D6:63:5C:8C:91:B8" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="120" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.52.100" addrtype="ipv4"/>
+<address addr="2A:CD:37:4C:45:F4" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="133" rttvar="5000" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.56.110" addrtype="ipv4"/>
+<address addr="FA:65:F5:19:0C:5A" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="297" rttvar="162" to="100000"/>
+</host>
+<host><status state="up" reason="arp-response" reason_ttl="0"/>
+<address addr="10.20.58.10" addrtype="ipv4"/>
+<address addr="42:24:85:50:29:AF" addrtype="mac"/>
+<hostnames>
+</hostnames>
+<times srtt="303" rttvar="326" to="100000"/>
+</host>
+<host><status state="up" reason="localhost-response" reason_ttl="0"/>
+<address addr="10.20.63.250" addrtype="ipv4"/>
+<hostnames>
+</hostnames>
+</host>
+<runstats><finished time="1795273397" timestr="Sat Nov 21 15:03:17 2026" summary="Nmap done at Sat Nov 21 15:03:17 2026; 16384 IP addresses (32 hosts up) scanned in 88.88 seconds" elapsed="88.88" exit="success"/><hosts up="32" down="16352" total="16384"/>
+</runstats>
+</nmaprun>

@@ -139,3 +139,7 @@ func normPrefix(p netip.Prefix) netip.Prefix {
 // Empty reports whether no scope is configured. Callers use it to avoid work
 // (such as DNS lookups) that would be refused anyway.
 func (s Scope) Empty() bool { return len(s.allowed) == 0 }
+
+// Excluded returns a copy of the excluded addresses. Scanners pass them to
+// nmap as exclusions.
+func (s Scope) Excluded() []netip.Addr { return slices.Clone(s.exclude) }
