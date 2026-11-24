@@ -206,7 +206,8 @@ const (
 type Finding struct {
 	Title            string
 	Severity         Severity
-	Description      string
+	Description      string // stable identity only: it is part of the DefectDojo hash
+	Observed         string // volatile observed data (steps_to_reproduce), not hashed
 	Date             time.Time
 	UniqueIDFromTool string // rampart:svc:<ip>:<port>/<proto> | rampart:sig:<ip>:<port>:<sig_id>
 	VulnIDFromTool   string // signature id, empty for plain services

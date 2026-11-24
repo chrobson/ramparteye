@@ -31,6 +31,7 @@ type wireFinding struct {
 	Title            string         `json:"title"`
 	Severity         string         `json:"severity"`
 	Description      string         `json:"description"`
+	Observed         string         `json:"steps_to_reproduce,omitempty"`
 	CWE              int            `json:"cwe,omitempty"`
 	Mitigation       string         `json:"mitigation,omitempty"`
 	References       string         `json:"references,omitempty"`
@@ -67,6 +68,7 @@ func (JSONCodec) Marshal(fs []model.Finding) ([]byte, error) {
 			Title:            strings.TrimSpace(f.Title),
 			Severity:         string(normalizeSeverity(string(f.Severity))),
 			Description:      f.Description,
+			Observed:         f.Observed,
 			CWE:              f.CWE,
 			Mitigation:       f.Mitigation,
 			References:       f.References,
@@ -111,6 +113,7 @@ type lenientFinding struct {
 	Title            string            `json:"title"`
 	Severity         string            `json:"severity"`
 	Description      string            `json:"description"`
+	Observed         string            `json:"steps_to_reproduce"`
 	CWE              json.RawMessage   `json:"cwe"`
 	Mitigation       string            `json:"mitigation"`
 	References       string            `json:"references"`
@@ -144,6 +147,7 @@ func (JSONCodec) Unmarshal(b []byte) ([]model.Finding, error) {
 			Title:            lf.Title,
 			Severity:         sev,
 			Description:      lf.Description,
+			Observed:         lf.Observed,
 			UniqueIDFromTool: lf.UniqueIDFromTool,
 			VulnIDFromTool:   lf.VulnIDFromTool,
 			Tags:             lf.Tags,

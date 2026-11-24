@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chrobson/ramparteye/internal/model"
 )
@@ -145,7 +146,8 @@ func BuildFindings(date time.Time, svcs []Service, anns []Annotation) []model.Fi
 		emit(model.Finding{
 			Title:            serviceTitle(s),
 			Severity:         sev,
-			Description:      serviceDescription(s, comments),
+			Description:      serviceDescription(s),
+			Observed:         serviceObserved(s, comments),
 			Date:             day,
 			UniqueIDFromTool: UniqueServiceID(k),
 			Endpoints:        []model.AssetKey{k},
@@ -166,7 +168,8 @@ func BuildFindings(date time.Time, svcs []Service, anns []Annotation) []model.Fi
 			f := model.Finding{
 				Title:            detectionTitle(d),
 				Severity:         sev,
-				Description:      detectionDescription(s, d, comments),
+				Description:      detectionDescription(s, d),
+				Observed:         detectionObserved(s, d, comments),
 				Date:             day,
 				UniqueIDFromTool: UniqueSignatureID(k, d.SignatureID),
 				VulnIDFromTool:   d.SignatureID,
@@ -246,12 +249,17 @@ func detectionSeverity(category string) model.Severity {
 	return model.SevInfo
 }
 
+// maxTitleLen is DefectDojo's title limit; titles are cut to it on a rune
+// boundary.
+const maxTitleLen = 500
+
+// Stable identity goes into Title and Description (DefectDojo hashes
+// title, cwe, line, file_path and description to match findings on
+// reimport); everything observed on the scanned host goes into Observed
+// (steps_to_reproduce), which is not hashed.
+
 func serviceTitle(s Service) string {
-	t := fmt.Sprintf("Open service %d/%s", s.Key.Port, s.Key.Proto)
-	if p := strings.TrimSpace(strings.TrimSpace(s.Product) + " " + strings.TrimSpace(s.Version)); p != "" {
-		t += " " + p
-	}
-	return oneLine(t)
+	return truncate(fmt.Sprintf("Open service %d/%s", s.Key.Port, s.Key.Proto), maxTitleLen)
 }
 
 func detectionTitle(d model.Detection) string {
@@ -259,22 +267,52 @@ func detectionTitle(d model.Detection) string {
 	if name == "" {
 		name = d.SignatureID
 	}
-	if d.Evidence["outdated"] != "" && d.Evidence["version"] != "" {
-		return oneLine("Outdated software detected: " + name + " " + d.Evidence["version"])
+	name = oneLine(name)
+	var t string
+	switch {
+	case d.Evidence["outdated"] != "":
+		t = "Outdated software detected: " + name
+	case d.Category == "admin-panel":
+		t = "Admin panel detected: " + name
+	case d.Category == "staging":
+		t = "Staging environment detected: " + name
+	default:
+		t = "Technology detected: " + name
 	}
-	switch d.Category {
-	case "admin-panel":
-		return oneLine("Admin panel detected: " + name)
-	case "staging":
-		return oneLine("Staging environment detected: " + name)
-	}
-	return oneLine("Technology detected: " + name)
+	return truncate(t, maxTitleLen)
 }
 
-func serviceDescription(s Service, comments []string) string {
+func serviceDescription(s Service) string {
 	var b strings.Builder
 	b.WriteString("Service detected by RampartEye.\n\n")
-	writeAssetLines(&b, s)
+	writeAssetLines(&b, s.Key)
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func detectionDescription(s Service, d model.Detection) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Signature %s matched.\n\n", code(d.SignatureID, 256))
+	writeAssetLines(&b, s.Key)
+	line(&b, "Category", d.Category)
+	if m := d.Meta; m != nil {
+		if len(m.CWE) > 0 {
+			ids := make([]string, len(m.CWE))
+			for i, c := range m.CWE {
+				ids[i] = "CWE-" + strconv.Itoa(c)
+			}
+			line(&b, "CWE", strings.Join(ids, ", "))
+		}
+		line(&b, "ATT&CK", strings.Join(m.Attack, ", "))
+		if r := oneLine(m.Remediation); r != "" {
+			b.WriteString("\nRemediation: " + r + "\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func serviceObserved(s Service, comments []string) string {
+	var b strings.Builder
+	line(&b, "Hostname", s.Hostname)
 	line(&b, "Product", s.Product)
 	line(&b, "Version", s.Version)
 	line(&b, "Extra info", s.ExtraInfo)
@@ -283,24 +321,24 @@ func serviceDescription(s Service, comments []string) string {
 	if len(s.Detections) > 0 {
 		names := make([]string, 0, len(s.Detections))
 		for _, d := range s.Detections {
-			names = append(names, d.Name)
+			n := d.Name
+			if n == "" {
+				n = d.SignatureID
+			}
+			names = append(names, n)
 		}
 		sort.Strings(names)
 		line(&b, "Technologies", strings.Join(names, ", "))
 	}
-	// The raw banner is deliberately left out: banners often carry per
-	// connection noise (SMTP dates, client ids), and DefectDojo's default
-	// hash for "Generic Findings Import" covers title and description, so a
-	// changing banner would close and recreate the finding on every reimport.
+	// The raw banner is deliberately left out: it carries per connection
+	// noise (SMTP dates, client ids).
 	writeComments(&b, comments)
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func detectionDescription(s Service, d model.Detection, comments []string) string {
+func detectionObserved(s Service, d model.Detection, comments []string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Signature `%s` matched.\n\n", d.SignatureID)
-	writeAssetLines(&b, s)
-	line(&b, "Category", d.Category)
+	line(&b, "Hostname", s.Hostname)
 	line(&b, "Confidence", strconv.Itoa(d.Confidence)+"%")
 	writeHTTPLines(&b, s.HTTP)
 	if len(d.Evidence) > 0 {
@@ -311,18 +349,17 @@ func detectionDescription(s Service, d model.Detection, comments []string) strin
 		}
 		sort.Strings(ks)
 		for _, k := range ks {
-			fmt.Fprintf(&b, "- %s: %s\n", k, oneLine(d.Evidence[k]))
+			fmt.Fprintf(&b, "- %s: %s\n", code(k, 64), code(d.Evidence[k], 256))
 		}
 	}
 	writeComments(&b, comments)
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func writeAssetLines(b *strings.Builder, s Service) {
-	line(b, "Host", s.Key.IP.String())
-	line(b, "Hostname", s.Hostname)
-	line(b, "Virtual host", s.Key.VHost)
-	line(b, "Port", fmt.Sprintf("%d/%s", s.Key.Port, s.Key.Proto))
+func writeAssetLines(b *strings.Builder, k model.AssetKey) {
+	line(b, "Host", k.IP.String())
+	line(b, "Virtual host", k.VHost)
+	line(b, "Port", fmt.Sprintf("%d/%s", k.Port, k.Proto))
 }
 
 func writeHTTPLines(b *strings.Builder, h *HTTPSummary) {
@@ -338,14 +375,55 @@ func writeHTTPLines(b *strings.Builder, h *HTTPSummary) {
 
 func writeComments(b *strings.Builder, comments []string) {
 	for _, c := range comments {
-		b.WriteString("\nAnalyst comment:\n\n> " + strings.ReplaceAll(strings.TrimSpace(c), "\n", "\n> ") + "\n")
+		if v := code(c, 1024); v != "" {
+			b.WriteString("\nAnalyst comment: " + v + "\n")
+		}
 	}
 }
 
+// line writes "- label: `value`"; empty values are skipped.
 func line(b *strings.Builder, label, v string) {
-	if v = oneLine(v); v != "" {
+	if v = code(v, 256); v != "" {
 		fmt.Fprintf(b, "- %s: %s\n", label, v)
 	}
+}
+
+// code renders untrusted text as a Markdown inline code span: whitespace is
+// collapsed, the value is cut to max bytes on a rune boundary and wrapped in
+// a backtick fence longer than any backtick run inside, so it can never
+// render as a link, image or HTML. Empty input yields "".
+func code(s string, max int) string {
+	s = truncate(oneLine(s), max)
+	if s == "" {
+		return ""
+	}
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if s[0] == '`' || s[len(s)-1] == '`' {
+		s = " " + s + " "
+	}
+	return fence + s + fence
+}
+
+// truncate cuts s to at most max bytes without splitting a rune.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 func oneLine(s string) string {

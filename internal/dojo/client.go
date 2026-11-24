@@ -29,6 +29,9 @@ const (
 	maxErrorBody   = 512
 )
 
+// reimportTimeout bounds Reimport when the http.Client has no Timeout.
+var reimportTimeout = defaultTimeout
+
 // Client is a minimal DefectDojo API v2 client. The API token is only ever
 // sent to the host of the configured base URL.
 type Client struct {
@@ -139,14 +142,18 @@ type CheckResult struct {
 	TokenValid    bool
 	CanImport     bool
 	ProductExists bool
-	Version       string // from the X-DefectDojo-Version header when sent
-	User          string
+	// Version is best effort: the X-DefectDojo-Version response header when
+	// the server sends it, otherwise empty.
+	Version string
+	User    string
 }
 
 // Check probes DefectDojo: server reachable, token accepted, the token's
 // user may import, and the product exists. The error is non-nil only when
 // the server could not be reached or answered unexpectedly; an invalid token
-// is a result (TokenValid=false), not an error.
+// is a result (TokenValid=false), not an error. A 403 is an error carrying
+// the status (the server rejected the request for a reason other than the
+// token) with Reachable=true.
 func (c *Client) Check(ctx context.Context, product string) (CheckResult, error) {
 	var res CheckResult
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
@@ -155,10 +162,13 @@ func (c *Client) Check(ctx context.Context, product string) (CheckResult, error)
 	body, hdr, err := c.get(ctx, "user_profile/")
 	var apiErr *APIError
 	switch {
-	case errors.As(err, &apiErr) && (apiErr.Status == http.StatusUnauthorized || apiErr.Status == http.StatusForbidden):
+	case errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized:
 		res.Reachable = true
 		res.Version = hdr.Get("X-DefectDojo-Version")
 		return res, nil
+	case errors.As(err, &apiErr):
+		res.Reachable = true
+		return res, err
 	case err != nil:
 		return res, err
 	}
@@ -203,9 +213,11 @@ type profile struct {
 	ProductMember     []member `json:"product_member"`
 }
 
-// canImport is true for superusers and for any membership with a role that
-// may import: DefectDojo role ids 1 Owner, 2 Maintainer, 3 Writer and 4
-// API_Importer (5 is Reader).
+// canImport is a best-effort answer: true for superusers and for any direct
+// membership (global, product type or product) with a role that may import.
+// DefectDojo role ids: 1 API_Importer, 2 Writer, 3 Maintainer, 4 Owner,
+// 5 Reader. Permissions inherited through groups are not considered, so
+// false can be a false negative; the import itself is the final judge.
 func (p profile) canImport() bool {
 	if p.User.IsSuperuser {
 		return true
@@ -230,8 +242,11 @@ func (p profile) canImport() bool {
 // Reimport uploads a Generic Findings file with /api/v2/reimport-scan/.
 // With auto_create_context DefectDojo creates product type, product,
 // engagement and test on the first call and reimports into the test on later
-// ones; findings with the same unique_id_from_tool are updated, not
-// duplicated, and CloseOldFindings closes the ones missing from the file.
+// ones. DefectDojo matches findings on reimport by its legacy hash (title,
+// cwe, line, file_path, description) for this parser, not by
+// unique_id_from_tool, which is why BuildFindings keeps title and
+// description to stable identity. CloseOldFindings closes findings missing
+// from the file.
 func (c *Client) Reimport(ctx context.Context, p PushParams, findings []byte) (ImportResult, error) {
 	if len(findings) > MaxUploadBytes {
 		return ImportResult{}, fmt.Errorf("findings file is %d bytes, limit is %d", len(findings), MaxUploadBytes)
@@ -274,6 +289,11 @@ func (c *Client) Reimport(ctx context.Context, p PushParams, findings []byte) (I
 	u, err := c.api("reimport-scan/")
 	if err != nil {
 		return ImportResult{}, err
+	}
+	if c.hc.Timeout == 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, reimportTimeout)
+		defer cancel()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, &buf)
 	if err != nil {

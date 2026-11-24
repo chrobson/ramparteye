@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ctx42/testing/pkg/assert"
 	"github.com/ctx42/testing/pkg/must"
@@ -41,7 +43,7 @@ func newFake(t *testing.T) (*fakeDojo, *httptest.Server) {
 			f.mu.Unlock()
 			if r.Header.Get("Authorization") != "Token "+testToken {
 				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = io.WriteString(w, `{"detail":"Invalid token. `+testToken+`"}`)
+				_, _ = io.WriteString(w, `{"detail":"Invalid token: `+r.Header.Get("Authorization")+`"}`)
 				return
 			}
 			h(w, r)
@@ -49,7 +51,6 @@ func newFake(t *testing.T) (*fakeDojo, *httptest.Server) {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v2/user_profile/", authed(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-DefectDojo-Version", "2.40.0")
 		_, _ = io.WriteString(w, f.profile)
 	}))
 	mux.HandleFunc("GET /api/v2/products/", authed(func(w http.ResponseWriter, r *http.Request) {
@@ -91,7 +92,7 @@ func TestCheckAllGreen(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, CheckResult{Reachable: true, TokenValid: true, CanImport: true, ProductExists: true,
-		Version: "2.40.0", User: "scanner"}, have)
+		Version: "", User: "scanner"}, have)
 	assert.Equal(t, "RampartEye", fake.form["name_exact"])
 }
 
@@ -123,10 +124,11 @@ func TestCheckPermissionsAndProduct(t *testing.T) {
 		canImp  bool
 	}{
 		"reader only":     {`{"user":{"username":"r"},"product_member":[{"role":5}]}`, false},
+		"importer":        {`{"user":{"username":"i"},"product_member":[{"role":1}]}`, true},
 		"no memberships":  {`{"user":{"username":"n"}}`, false},
-		"writer":          {`{"user":{"username":"w"},"product_member":[{"role":3}]}`, true},
-		"api importer":    {`{"user":{"username":"a"},"product_type_member":[{"role":4}]}`, true},
-		"global maintain": {`{"user":{"username":"m"},"global_role":{"role":2}}`, true},
+		"writer":          {`{"user":{"username":"w"},"product_member":[{"role":2}]}`, true},
+		"owner":           {`{"user":{"username":"a"},"product_type_member":[{"role":4}]}`, true},
+		"global maintain": {`{"user":{"username":"m"},"global_role":{"role":3}}`, true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -193,6 +195,7 @@ func TestReimportErrorsNeverLeakToken(t *testing.T) {
 	var apiErr *APIError
 	assert.ErrorAs(t, &apiErr, err)
 	assert.Equal(t, 401, apiErr.Status)
+	assert.Contain(t, "Invalid token", err.Error())
 	assert.NotContain(t, "other-"+testToken, err.Error())
 
 	redacting := NewClient(srv.URL, testToken, srv.Client())
@@ -270,9 +273,11 @@ func TestSameHostRedirectKeepsToken(t *testing.T) {
 }
 
 func TestTLSVerifiedByDefault(t *testing.T) {
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, superProfile)
 	}))
+	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
+	srv.StartTLS()
 	t.Cleanup(srv.Close)
 
 	// Default client does not trust the test certificate.
@@ -286,4 +291,51 @@ func TestTLSVerifiedByDefault(t *testing.T) {
 	have, err := NewClient(srv.URL, testToken, NewHTTPClient(pool, 0)).Check(context.Background(), "")
 	assert.NoError(t, err)
 	assert.True(t, have.TokenValid)
+}
+
+func TestCheck403IsErrorWithStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+
+	have, err := NewClient(srv.URL, testToken, srv.Client()).Check(context.Background(), "")
+
+	var apiErr *APIError
+	assert.ErrorAs(t, &apiErr, err)
+	assert.Equal(t, 403, apiErr.Status)
+	assert.True(t, have.Reachable)
+	assert.False(t, have.TokenValid)
+}
+
+func TestVersionFromHeaderWhenSent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-DefectDojo-Version", "2.40.0")
+		_, _ = io.WriteString(w, superProfile)
+	}))
+	t.Cleanup(srv.Close)
+
+	have := must.Value(NewClient(srv.URL, testToken, srv.Client()).Check(context.Background(), ""))
+
+	assert.Equal(t, "2.40.0", have.Version)
+}
+
+func TestReimportAppliesOwnTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	old := reimportTimeout
+	reimportTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { reimportTimeout = old })
+
+	// A client without Timeout must still be bounded.
+	_, err := NewClient(srv.URL, testToken, &http.Client{}).Reimport(context.Background(), PushParams{}, goldenFile(t))
+
+	assert.ErrorContain(t, "deadline exceeded", err)
 }

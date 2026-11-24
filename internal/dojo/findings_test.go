@@ -92,12 +92,12 @@ func TestBuildRules(t *testing.T) {
 		severity model.Severity
 		title    string
 	}{
-		{"rampart:svc:10.20.0.11:443/tcp", model.SevInfo, "Open service 443/tcp nginx 1.27.4"},
-		{"rampart:svc:10.20.0.11:22/tcp", model.SevLow, "Open service 22/tcp OpenSSH 9.6p1"},
+		{"rampart:svc:10.20.0.11:443/tcp", model.SevInfo, "Open service 443/tcp"},
+		{"rampart:svc:10.20.0.11:22/tcp", model.SevLow, "Open service 22/tcp"},
 		{"rampart:sig:10.20.0.11:443:wordpress", model.SevInfo, "Technology detected: WordPress"},
 		{"rampart:sig:10.20.0.14:80:phpmyadmin", model.SevMedium, "Admin panel detected: phpMyAdmin"},
 		{"rampart:sig:10.20.0.21:8080:staging-banner", model.SevMedium, "Staging environment detected: Staging banner"},
-		{"rampart:svc:10.20.0.30:53/udp", model.SevInfo, "Open service 53/udp dnsmasq 2.90"},
+		{"rampart:svc:10.20.0.30:53/udp", model.SevInfo, "Open service 53/udp"},
 	}
 	for _, c := range cases {
 		t.Run(c.uid, func(t *testing.T) {
@@ -116,8 +116,10 @@ func TestBuildRules(t *testing.T) {
 	}
 	ssh := by["rampart:svc:10.20.0.11:22/tcp"]
 	assert.Equal(t, []string{"legacy-ssh", "owner:ops", "rampart", "service"}, ssh.Tags)
-	assert.Contain(t, "Disable after the migration.", ssh.Description)
-	assert.NotContain(t, "SSH-2.0-OpenSSH_9.6p1", ssh.Description)
+	assert.Contain(t, "Disable after the migration.", ssh.Observed)
+	assert.NotContain(t, "Disable after the migration.", ssh.Description)
+	assert.NotContain(t, "SSH-2.0-OpenSSH_9.6p1", ssh.Observed)
+	assert.NotContain(t, "9.6p1", ssh.Description)
 	assert.Equal(t, "phpmyadmin", by["rampart:sig:10.20.0.14:80:phpmyadmin"].VulnIDFromTool)
 	assert.Len(t, 8, fs) // 5 services + 3 detections
 }
@@ -166,6 +168,9 @@ func TestFindingsCarryCWEAndAttack(t *testing.T) {
 		"https://cwe.mitre.org/data/definitions/668.html\n"+
 		"https://attack.mitre.org/techniques/T1078/\n"+
 		"https://attack.mitre.org/techniques/T1190/", got.References)
+	assert.Contain(t, "CWE-668", got.Description)
+	assert.Contain(t, "T1078, T1190", got.Description)
+	assert.Contain(t, "Restrict phpMyAdmin to the administration network.", got.Description)
 	tags := strings.Join(got.Tags, ",")
 	assert.Contain(t, "attack-t1078", tags)
 	assert.Contain(t, "attack-t1190", tags)
@@ -234,4 +239,76 @@ func TestDetectionSeverity(t *testing.T) {
 	assert.Equal(t, model.SevInfo, DetectionSeverity(model.Detection{Category: "cms"}))
 	assert.Equal(t, model.SevMedium, DetectionSeverity(model.Detection{Category: "admin-panel"}))
 	assert.Equal(t, model.SevHigh, DetectionSeverity(model.Detection{Category: "cms", Evidence: map[string]string{"severity": "high"}}))
+}
+
+// DefectDojo matches reimported findings on a hash of title, cwe and
+// description, so observed values must not reach them.
+func TestStableHashFields(t *testing.T) {
+	a, _ := fixture()
+	b, _ := fixture()
+	for i := range b {
+		b[i].Product, b[i].Version, b[i].ExtraInfo, b[i].CPE = "other", "9.9.9", "x", "cpe:/a:o:o"
+		b[i].Hostname = "renamed.lab.test"
+		if b[i].HTTP != nil {
+			b[i].HTTP = &HTTPSummary{URL: b[i].HTTP.URL + "x", Status: 503, Title: "Changed title"}
+		}
+		for j := range b[i].Detections {
+			b[i].Detections[j].Confidence = 10
+			b[i].Detections[j].Evidence = map[string]string{"version": "1.2.3", "meta_generator": "changed"}
+		}
+	}
+
+	fa, fb := BuildFindings(runDate, a, nil), BuildFindings(runDate, b, nil)
+
+	assert.Equal(t, len(fa), len(fb))
+	changed := 0
+	for i := range fa {
+		assert.Equal(t, fa[i].UniqueIDFromTool, fb[i].UniqueIDFromTool)
+		assert.Equal(t, fa[i].Title, fb[i].Title)
+		assert.Equal(t, fa[i].Description, fb[i].Description)
+		assert.Equal(t, fa[i].CWE, fb[i].CWE)
+		if fa[i].Observed != fb[i].Observed {
+			changed++
+		}
+	}
+	assert.True(t, changed > 0, "observed data should carry the volatile values")
+}
+
+func TestOutdatedTitleHasNoVersion(t *testing.T) {
+	d := model.Detection{SignatureID: "wp", Name: "WordPress", Evidence: map[string]string{"outdated": "true", "version": "5.0"}}
+
+	assert.Equal(t, "Outdated software detected: WordPress", detectionTitle(d))
+}
+
+func TestHostileScannedTextIsCodeSpan(t *testing.T) {
+	hostile := "](x) ![](http://e) <script>"
+	s := Service{ServiceObs: model.ServiceObs{Key: key("10.0.0.1", 80, "tcp"), Product: "a ``` b`", Version: "`"},
+		HTTP: &HTTPSummary{URL: "http://10.0.0.1/", Status: 200, Title: hostile},
+		Detections: []model.Detection{{SignatureID: "sig", Name: "Sig", Category: "cms",
+			Evidence: map[string]string{"k": hostile + "\n`tick`"}}}}
+
+	fs := BuildFindings(runDate, []Service{s}, nil)
+
+	assert.Len(t, 2, fs)
+	for _, f := range fs {
+		assert.NotContain(t, hostile, f.Description)
+	}
+	assert.Contain(t, "- Page title: `"+hostile+"`", fs[0].Observed)
+	assert.Contain(t, "- Product: ```` a ``` b` ````", fs[0].Observed)
+	assert.Contain(t, "- Version: `` ` ``", fs[0].Observed)
+	assert.Contain(t, "- `k`: `` "+hostile+" `tick` ``", fs[1].Observed)
+}
+
+func TestCodeSpan(t *testing.T) {
+	assert.Equal(t, "", code("  \n ", 256))
+	assert.Equal(t, "`a b`", code("a \n\t b", 256))
+	assert.Equal(t, "``a`b``", code("a`b", 256))
+	// 3-byte runes cut on a boundary, never mid-rune.
+	assert.Equal(t, "`"+strings.Repeat("€", 85)+"`", code(strings.Repeat("€", 100), 256))
+}
+
+func TestTitleCappedAt500(t *testing.T) {
+	d := model.Detection{SignatureID: "x", Name: strings.Repeat("n", 600)}
+
+	assert.Len(t, 500, detectionTitle(d))
 }

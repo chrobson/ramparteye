@@ -18,6 +18,7 @@ var allowedFindingKeys = map[string]bool{
 	"title":               true,
 	"severity":            true,
 	"description":         true,
+	"steps_to_reproduce":  true,
 	"cwe":                 true,
 	"mitigation":          true,
 	"references":          true,
@@ -94,6 +95,9 @@ func Validate(b []byte) error {
 				add("finding %d: required field %q is missing or empty", i, k)
 			}
 		}
+		if s, err := stringField(f, "title"); err == nil && len(s) > maxTitleLen {
+			add("finding %d: title longer than %d bytes", i, maxTitleLen)
+		}
 		if s, err := stringField(f, "severity"); err == nil && s != "" && !validSeverity(s) {
 			add("finding %d: severity %q must be one of Info, Low, Medium, High, Critical", i, s)
 		}
@@ -133,7 +137,7 @@ func Validate(b []byte) error {
 				add("finding %d: cwe must be a non-negative integer", i)
 			}
 		}
-		for _, k := range []string{"mitigation", "references"} {
+		for _, k := range []string{"mitigation", "references", "steps_to_reproduce"} {
 			if _, err := stringField(f, k); err != nil {
 				add("finding %d: %v", i, err)
 			}

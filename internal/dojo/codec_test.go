@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,8 @@ func TestValidateRejects(t *testing.T) {
 		"cwe as string":       one(func(f map[string]any) { f["cwe"] = "CWE-306" }),
 		"cwe negative":        one(func(f map[string]any) { f["cwe"] = -1 }),
 		"mitigation number":   one(func(f map[string]any) { f["mitigation"] = 5 }),
+		"title too long":      one(func(f map[string]any) { f["title"] = strings.Repeat("t", 501) }),
+		"steps not string":    one(func(f map[string]any) { f["steps_to_reproduce"] = 1 }),
 		"no findings key":     []byte(`{}`),
 		"not json":            []byte(`{"findings":`),
 		"trailing data":       append(one(func(map[string]any) {}), []byte(`{}`)...),
