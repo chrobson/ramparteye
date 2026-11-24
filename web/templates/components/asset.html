@@ -1,0 +1,48 @@
+{{/* Shared by the host and service pages. */}}
+
+{{/* Runs strip: one square per run. Data: []RunCell. */}}
+{{define "runs-strip"}}{{if .}}<div class="runs" role="group" aria-label="Runs, oldest first">{{range .}}<i class="{{.Class}}" role="img" aria-label="{{.Label}}" title="{{.Label}}"></i>{{end}}</div>{{else}}<p class="text-muted">No finished scans yet.</p>{{end}}{{end}}
+
+{{/* Time-of-day bands. Data: []BandView. */}}
+{{define "bands"}}<div class="bands" role="group" aria-label="Time of day (UTC), seen in runs">{{range .}}<div class="{{.Class}}"><span class="block text-[10px]">{{.Label}}</span>{{.Text}}</div>{{end}}</div>{{end}}
+
+{{/* Weekly heatmap, 7 weekdays by 24 hours (UTC). Data: AvailView. */}}
+{{define "heatmap"}}<div role="group" aria-label="Weekly availability heatmap, weekday by hour (UTC)">
+<div class="heat" aria-hidden="true"><span></span>{{range .HourLabels}}<span>{{.}}</span>{{end}}</div>
+{{range .Heat}}<div class="heat"><span aria-hidden="true">{{.Day}}</span>{{range .Cells}}<i data-day="{{.Day}}" data-hour="{{.Hour}}" class="{{.Class}}" role="img" aria-label="{{.Label}}" title="{{.Label}}"></i>{{end}}</div>
+{{end}}</div>
+<p class="mt-2 text-xs text-muted">Darker is seen in more runs; red marks hours that were scanned but never seen; empty hours had no run.</p>{{end}}
+
+{{/* Score breakdown. Data: []ReasonView. */}}
+{{define "reasons"}}{{if .}}<table class="tbl max-w-md"><thead><tr><th>Rule</th><th class="text-right">Points</th></tr></thead>
+<tbody>{{range .}}<tr><td>{{.Rule}}</td><td class="text-right font-mono">{{if .Points}}+{{.Points}}{{else}}–{{end}}</td></tr>{{end}}</tbody></table>
+{{else}}<p class="text-muted">No rule awarded points.</p>{{end}}{{end}}
+
+{{/* CWE and ATT&CK tags. Data: dict "CWE" []int "Attack" []string. */}}
+{{define "meta-tags"}}{{range .CWE}}<a class="tag bg-info-bg text-fg" href="https://cwe.mitre.org/data/definitions/{{.}}.html" target="_blank" rel="noopener noreferrer" title="Common Weakness Enumeration">CWE-{{.}}</a>{{end}}{{range .Attack}}<a class="tag bg-info-bg text-fg" href="https://attack.mitre.org/techniques/{{.}}/" target="_blank" rel="noopener noreferrer" title="MITRE ATT&amp;CK">{{.}}</a>{{end}}{{end}}
+
+{{/* Changes of one asset. Data: []ChangeRow. */}}
+{{define "asset-changes"}}{{if .}}<table class="tbl"><tbody>{{range .}}<tr><td class="font-mono">#{{.RunID}}</td><td>{{template "change-tag" .Kind}}</td><td class="text-muted">{{template "cell" (dict "Value" .Detail "Max" 80)}}</td></tr>{{end}}</tbody></table>
+{{else}}<p class="text-muted">No changes recorded.</p>{{end}}{{end}}
+
+{{/* Analyst annotation. Data: AnnotationForm. */}}
+{{define "annotation-panel"}}{{$f := .}}<section class="panel mt-4" aria-label="Analyst annotation">
+{{template "panel-title" "Analyst annotation"}}
+{{if $f.Error}}<p role="alert" class="alert-error mb-2">{{$f.Error}}</p>{{end}}
+{{if $f.CanEdit}}<form method="post" action="{{$f.Action}}" class="grid max-w-xl gap-2">
+<label><span class="lbl">Comment</span><textarea name="comment" rows="3" maxlength="4000" class="input">{{$f.Comment}}</textarea></label>
+<label><span class="lbl">Tags, comma separated</span><input name="tags" class="input" value="{{$f.Tags}}"></label>
+<label><span class="lbl">Severity</span><select name="severity" class="input"><option value="">Not set</option>{{range $f.Severities}}<option value="{{.}}"{{if eq (print .) $f.Severity}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<label class="flex items-center gap-2"><input type="checkbox" name="false_positive" value="1"{{if $f.FalsePositive}} checked{{end}}> False positive (score drops to 0)</label>
+<div><button type="submit" class="btn btn-primary">Save annotation</button></div>
+</form>
+{{if $f.Exists}}<form method="post" action="{{$f.DeleteAction}}" data-confirm="Remove this annotation?" data-confirm-ok="Remove" class="mt-2"><button type="submit" class="btn">Remove annotation</button></form>{{end}}
+{{else if $f.Exists}}<dl class="grid gap-1">
+<div><dt class="lbl">Comment</dt><dd class="whitespace-pre-wrap">{{$f.Comment}}</dd></div>
+{{with $f.Tags}}<div><dt class="lbl">Tags</dt><dd>{{.}}</dd></div>{{end}}
+{{with $f.Severity}}<div><dt class="lbl">Severity set by analyst</dt><dd>{{.}}</dd></div>{{end}}
+{{if $f.FalsePositive}}<div><dt class="lbl">False positive</dt><dd>yes</dd></div>{{end}}
+</dl>
+{{else}}<p class="text-muted">No annotation.</p>{{end}}
+<p class="mt-2 text-xs text-muted">Annotations belong to this address (and port and virtual host) and stay across scans.</p>
+</section>{{end}}

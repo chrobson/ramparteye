@@ -172,6 +172,75 @@
     @apply bg-med-bg text-med;
   }
 
+  .quick {
+    @apply cursor-pointer rounded-full border border-edge px-3 py-1 text-xs text-fg hover:bg-row;
+  }
+  .quick:has(input:checked) {
+    @apply border-brand bg-brand-bg text-brand-fg;
+  }
+  .quick:has(input:focus-visible) {
+    @apply outline outline-2 outline-offset-2 outline-brand;
+  }
+
+  .runs {
+    @apply my-1.5 flex flex-wrap gap-1;
+  }
+  .runs > i {
+    @apply block h-3.5 w-3.5 rounded-sm;
+  }
+  .run-up {
+    @apply bg-ok;
+  }
+  .run-down {
+    @apply bg-bad;
+  }
+  .run-na {
+    @apply bg-line;
+  }
+  .bands {
+    @apply mt-2 grid grid-cols-4 gap-1 text-center;
+  }
+  .bands > div {
+    @apply rounded bg-row p-1;
+  }
+  .band-hi {
+    @apply bg-new-bg text-new;
+  }
+  .band-mid {
+    @apply bg-med-bg text-med;
+  }
+  .band-lo {
+    @apply bg-gone-bg text-gone;
+  }
+  .band-none {
+    @apply text-dim;
+  }
+  .heat {
+    @apply mt-0.5 grid gap-0.5;
+    grid-template-columns: 2rem repeat(24, minmax(0, 1fr));
+  }
+  .heat > span {
+    @apply text-[9px] leading-3 text-dim;
+  }
+  .heat > i {
+    @apply block h-3 rounded-sm;
+  }
+  .heat-none {
+    @apply bg-row;
+  }
+  .heat-miss {
+    @apply bg-gone-bg ring-1 ring-inset ring-bad-line;
+  }
+  .heat-1 {
+    @apply bg-dim/60;
+  }
+  .heat-2 {
+    @apply bg-muted;
+  }
+  .heat-3 {
+    @apply bg-fg;
+  }
+
   .confirm {
     @apply w-full max-w-md rounded-md border border-line bg-panel p-5 text-fg;
   }

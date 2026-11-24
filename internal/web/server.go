@@ -50,6 +50,14 @@ type Store interface {
 	HostStates(ctx context.Context, state model.HostStateKind) ([]model.HostState, error)
 	HostStateCounts(ctx context.Context) (map[model.HostStateKind]int, error)
 	AnnotationsByIPs(ctx context.Context, ips []netip.Addr) (map[model.AssetKey]store.Annotation, error)
+
+	// Assets.
+	AssetHistory(ctx context.Context, key model.AssetKey, lastRuns int) (store.AssetTimeline, error)
+	HTTPObs(ctx context.Context, serviceID int64) (model.HTTPObs, error)
+	Signatures(ctx context.Context) ([]store.SignatureRow, error)
+	Annotation(ctx context.Context, k model.AssetKey) (store.Annotation, error)
+	UpsertAnnotation(ctx context.Context, a store.Annotation) (store.Annotation, error)
+	DeleteAnnotation(ctx context.Context, k model.AssetKey, userID int64) error
 }
 
 // Runner is the scan runner as the UI sees it; *runner.Runner satisfies it.
@@ -169,8 +177,17 @@ func (s *Server) Handler() http.Handler {
 		r.With(s.require(auth.PermResultsRead)).Get("/events", s.events)
 		r.With(s.require(auth.PermScansRun)).Post("/scans/cancel-all", s.cancelAll)
 
+		r.With(s.require(auth.PermResultsRead)).Get("/assets", s.assetsList)
+		r.With(s.require(auth.PermResultsRead)).Get("/assets/{ip}", s.hostPage)
+		r.With(s.require(auth.PermResultsRead)).Get("/assets/{ip}/{port}/{proto}", s.servicePage)
+		edit := r.With(s.require(auth.PermResultsEdit))
+		edit.Post("/assets/{ip}/annotation", s.annotationSave)
+		edit.Post("/assets/{ip}/annotation/delete", s.annotationDelete)
+		edit.Post("/assets/{ip}/{port}/{proto}/annotation", s.annotationSave)
+		edit.Post("/assets/{ip}/{port}/{proto}/annotation/delete", s.annotationDelete)
+
 		for _, n := range navItems {
-			if n.Href == "/" {
+			if n.Href == "/" || n.Href == "/assets" {
 				continue
 			}
 			r.With(s.require(n.Perm)).Get(n.Href, s.stubPage(n.Label))

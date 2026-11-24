@@ -93,6 +93,9 @@ const (
 	maxScore         = 100
 )
 
+// ruleDatabase is the rule text of the database and cache class.
+const ruleDatabase = "database or cache reachable from the network"
+
 // serviceClass is an exposed service type that is interesting by itself.
 type serviceClass struct {
 	rule     string
@@ -105,7 +108,7 @@ type serviceClass struct {
 var serviceClasses = []serviceClass{
 	{"Docker API without TLS", 40, []string{"docker"}, []int{2375}},
 	{"telnet (unencrypted)", 30, []string{"telnet"}, []int{23}},
-	{"database or cache reachable from the network", 20,
+	{ruleDatabase, 20,
 		[]string{"postgresql", "mysql", "ms-sql-s", "oracle", "oracle-tns", "mongodb", "mongod", "redis",
 			"memcached", "memcache", "elasticsearch", "couchdb", "cassandra"},
 		[]int{5432, 3306, 1433, 1521, 27017, 6379, 11211, 9200}},
@@ -134,6 +137,13 @@ func matchClass(service string, port int) (serviceClass, bool) {
 		}
 	}
 	return serviceClass{}, false
+}
+
+// ExposedDatabase reports whether the nmap service name or port marks a
+// database or cache, the class the score treats as "exposed database".
+func ExposedDatabase(service string, port int) bool {
+	c, ok := matchClass(service, port)
+	return ok && c.rule == ruleDatabase
 }
 
 // Score evaluates the rules for one service.

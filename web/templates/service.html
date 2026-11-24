@@ -1,0 +1,74 @@
+{{define "title"}}{{.Data.Title}}{{end}}
+{{define "content"}}{{$d := .Data}}
+<p class="text-muted"><a class="underline" href="/assets">Assets</a> / <a class="font-mono underline" href="{{$d.HostHref}}">{{$d.Key.IP}}</a> / <span class="font-mono">{{$d.Key.Port}}/{{$d.Key.Proto}}</span></p>
+<h1 class="mt-1 font-mono text-[17px] font-semibold">{{$d.Title}}{{with $d.Key.VHost}} <span class="text-muted">({{.}})</span>{{end}} {{template "score" $d.Score}}</h1>
+<p class="text-muted">{{template "cell" (dict "Value" $d.Product "Max" 80)}}</p>
+
+<div class="mt-4 grid gap-3 lg:grid-cols-2">
+<section class="panel" aria-label="Service">
+{{template "panel-title" "Service"}}
+<dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1">
+<dt class="text-muted">nmap service</dt><dd>{{template "cell" (dict "Value" $d.Svc.Banner "Max" 80)}}</dd>
+<dt class="text-muted">Product</dt><dd>{{template "cell" (dict "Value" $d.Product "Max" 80)}}</dd>
+{{with $d.Svc.ExtraInfo}}<dt class="text-muted">Extra info</dt><dd>{{template "cell" (dict "Value" . "Max" 120)}}</dd>{{end}}
+{{with $d.Svc.CPE}}<dt class="text-muted">CPE</dt><dd class="font-mono">{{template "cell" (dict "Value" . "Max" 120)}}</dd>{{end}}
+{{with $d.Svc.Hostname}}<dt class="text-muted">Host name</dt><dd>{{template "cell" (dict "Value" . "Max" 80)}}</dd>{{end}}
+</dl>
+</section>
+<section class="panel" aria-label="Interest score">
+{{template "panel-title" "Why this score"}}
+<p><b class="font-mono">{{$d.Score}}</b>/100 · priority {{$d.Priority}}</p>
+{{template "reasons" $d.Reasons}}
+<p class="mt-2 text-xs text-muted">The score is a sum of visible rules (detections, service type, TLS, changes, analyst notes), capped at 100. It orders what to review first; it is not a vulnerability rating.</p>
+</section>
+</div>
+
+<section class="panel mt-4" aria-label="Detections">
+{{template "panel-title" "Detections"}}
+{{range $d.Detections}}<div class="item">
+{{template "sev" .Severity}} <b>{{template "cell" (dict "Value" .Name "Max" 80)}}</b> <span class="text-muted">{{.Category}} · confidence {{.Confidence}}%</span>{{with .Outdated}} <span class="tag bg-high-bg text-high">outdated version {{template "cell" (dict "Value" . "Max" 40)}}</span>{{end}}
+<div>{{template "meta-tags" .}}</div>
+{{if .Evidence}}<dl class="mt-1 grid grid-cols-[8rem_1fr] gap-x-3 text-xs">{{range .Evidence}}<dt class="font-mono text-muted">{{.K}}</dt><dd class="font-mono">{{template "cell" (dict "Value" .V "Max" 160)}}</dd>{{end}}</dl>{{end}}
+{{with .Remediation}}<p class="mt-1"><span class="lbl">Remediation</span><br>{{.}}</p>{{end}}
+</div>{{else}}<p class="text-muted">No detections.</p>{{end}}
+</section>
+
+{{with $d.HTTP}}<section class="panel mt-4" aria-label="HTTP">
+{{template "panel-title" "HTTP and TLS"}}
+<dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1">
+<dt class="text-muted">URL</dt><dd class="font-mono">{{template "cell" (dict "Value" .URL "Max" 120)}}</dd>
+<dt class="text-muted">Status</dt><dd>{{.Status}}</dd>
+<dt class="text-muted">Response time</dt><dd>{{if .ResponseMS}}{{.ResponseMS}} ms{{if $d.Slow}} <span class="tag bg-med-bg text-med">slow</span>{{end}}{{else}}<span class="text-dim">not measured</span>{{end}}</dd>
+<dt class="text-muted">Title</dt><dd>{{template "cell" (dict "Value" .Title "Max" 120)}}</dd>
+{{with .FaviconMMH3}}<dt class="text-muted">Favicon (mmh3)</dt><dd class="font-mono">{{.}}</dd>{{end}}
+{{with .BodySHA256}}<dt class="text-muted">Body SHA-256</dt><dd class="font-mono break-all">{{.}}</dd>{{end}}
+</dl>
+{{if .Redirects}}<h3 class="lbl mt-3">Redirects</h3><ol class="list-decimal pl-5">{{range .Redirects}}<li>{{.Status}} → <span class="font-mono">{{template "cell" (dict "Value" .URL "Max" 120)}}</span></li>{{end}}</ol>{{end}}
+<h3 class="lbl mt-3">Response headers</h3>
+{{if $d.Headers}}<table class="tbl"><tbody>{{range $d.Headers}}<tr><td class="font-mono">{{template "cell" (dict "Value" .Name "Max" 60)}}</td><td class="font-mono">{{range .Values}}<div>{{template "cell" (dict "Value" . "Max" 200)}}</div>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="text-muted">None recorded.</p>{{end}}
+<h3 class="lbl mt-3">Cookies</h3>
+{{if .Cookies}}<table class="tbl"><thead><tr><th>Name</th><th>Secure</th><th>HttpOnly</th><th>SameSite</th></tr></thead><tbody>{{range .Cookies}}<tr><td class="font-mono">{{template "cell" (dict "Value" .Name "Max" 60)}}</td><td>{{if .Secure}}yes{{else}}<span class="text-bad">no</span>{{end}}</td><td>{{if .HTTPOnly}}yes{{else}}<span class="text-bad">no</span>{{end}}</td><td>{{template "cell" (dict "Value" .SameSite "Max" 20)}}</td></tr>{{end}}</tbody></table>{{else}}<p class="text-muted">None recorded.</p>{{end}}
+{{with .TLS}}<h3 class="lbl mt-3">TLS certificate</h3>
+<dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1">
+<dt class="text-muted">Subject</dt><dd>{{template "cell" (dict "Value" .Subject "Max" 120)}}</dd>
+<dt class="text-muted">Issuer</dt><dd>{{template "cell" (dict "Value" .Issuer "Max" 120)}}</dd>
+<dt class="text-muted">Alt names</dt><dd>{{range .SANs}}<span class="mr-2 font-mono">{{template "cell" (dict "Value" . "Max" 60)}}</span>{{else}}<span class="text-dim">none</span>{{end}}</dd>
+<dt class="text-muted">TLS version</dt><dd>{{.Version}}</dd>
+<dt class="text-muted">Problems</dt><dd>{{if or .Expired .SelfSigned .Mismatch}}<span class="text-bad">{{if .Expired}}expired {{end}}{{if .SelfSigned}}self-signed {{end}}{{if .Mismatch}}host name mismatch{{end}}</span>{{else}}none{{end}}</dd>
+</dl>{{end}}
+</section>{{end}}
+
+<div class="mt-4 grid gap-3 lg:grid-cols-2">
+<section class="panel" aria-label="Runs">
+{{template "panel-title" "Runs"}}
+{{template "runs-strip" $d.Avail.Runs}}
+<p class="mt-1">{{$d.Avail.Summary}}</p>
+</section>
+<section class="panel" aria-label="Changes of this asset">
+{{template "panel-title" "Changes of this asset"}}
+{{template "asset-changes" $d.Changes}}
+</section>
+</div>
+
+{{template "annotation-panel" $d.Note}}
+{{end}}

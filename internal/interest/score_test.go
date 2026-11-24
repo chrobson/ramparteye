@@ -161,3 +161,11 @@ func TestScore_ranking(t *testing.T) {
 	assert.True(t, redis.Score > nginx.Score)
 	assert.Equal(t, "low", nginx.Priority)
 }
+
+func TestExposedDatabase(t *testing.T) {
+	assert.True(t, ExposedDatabase("redis", 6379))
+	assert.True(t, ExposedDatabase("postgresql", 15432))
+	assert.True(t, ExposedDatabase("http", 9200))
+	assert.False(t, ExposedDatabase("ssh", 22))
+	assert.False(t, ExposedDatabase("telnet", 23))
+}

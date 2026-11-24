@@ -68,7 +68,8 @@ type fakeStore struct {
 	audit    []auditEntry
 	nextID   int64
 
-	dash dashData // dashboard fixtures
+	dash   dashData  // dashboard fixtures
+	assets assetData // asset page fixtures
 }
 
 // dashData is what the fake store returns for the dashboard queries.
@@ -430,4 +431,62 @@ func (f *fakeStore) Run(_ context.Context, id int64) (store.RunSummary, error) {
 		}
 	}
 	return store.RunSummary{}, store.ErrRunNotFound
+}
+
+// assetData is what the fake store returns for the asset pages.
+type assetData struct {
+	history  map[model.AssetKey]store.AssetTimeline
+	http     map[int64]model.HTTPObs
+	sigs     []store.SignatureRow
+	upserts  []store.Annotation
+	deleted  []model.AssetKey
+	failNote error // returned by UpsertAnnotation and DeleteAnnotation
+}
+
+func (f *fakeStore) AssetHistory(_ context.Context, k model.AssetKey, _ int) (store.AssetTimeline, error) {
+	h := f.assets.history[k]
+	h.Key = k
+	return h, nil
+}
+
+func (f *fakeStore) HTTPObs(_ context.Context, id int64) (model.HTTPObs, error) {
+	if o, ok := f.assets.http[id]; ok {
+		return o, nil
+	}
+	return model.HTTPObs{}, store.ErrNotFound
+}
+
+func (f *fakeStore) Signatures(context.Context) ([]store.SignatureRow, error) {
+	return f.assets.sigs, nil
+}
+
+func (f *fakeStore) Annotation(_ context.Context, k model.AssetKey) (store.Annotation, error) {
+	if a, ok := f.dash.notes[k]; ok {
+		return a, nil
+	}
+	return store.Annotation{}, store.ErrAnnotationNotFound
+}
+
+func (f *fakeStore) UpsertAnnotation(_ context.Context, a store.Annotation) (store.Annotation, error) {
+	if f.assets.failNote != nil {
+		return a, f.assets.failNote
+	}
+	if f.dash.notes == nil {
+		f.dash.notes = map[model.AssetKey]store.Annotation{}
+	}
+	f.dash.notes[a.Key] = a
+	f.assets.upserts = append(f.assets.upserts, a)
+	return a, nil
+}
+
+func (f *fakeStore) DeleteAnnotation(_ context.Context, k model.AssetKey, _ int64) error {
+	if f.assets.failNote != nil {
+		return f.assets.failNote
+	}
+	if _, ok := f.dash.notes[k]; !ok {
+		return store.ErrAnnotationNotFound
+	}
+	delete(f.dash.notes, k)
+	f.assets.deleted = append(f.assets.deleted, k)
+	return nil
 }

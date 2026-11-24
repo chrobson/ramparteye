@@ -1,0 +1,48 @@
+{{define "title"}}{{.Data.Title}}{{end}}
+{{define "content"}}{{$d := .Data}}
+<p class="text-muted"><a class="underline" href="/assets">Assets</a> / <span class="font-mono">{{$d.IP}}</span></p>
+<h1 class="mt-1 font-mono text-[17px] font-semibold">{{$d.IP}} <span class="tag {{$d.StateCls}}">{{$d.State}}</span></h1>
+<p class="text-muted">{{with $d.Hostname}}{{template "cell" (dict "Value" . "Max" 80)}} · {{end}}{{len $d.Services}} service{{if ne (len $d.Services) 1}}s{{end}} · last seen {{ago $d.LastSeen}}{{if not $d.FirstSeen.IsZero}} · first seen {{ago $d.FirstSeen}}{{end}}</p>
+
+<div class="mt-4 grid gap-3 lg:grid-cols-2">
+<section class="panel" aria-label="Runs">
+{{template "panel-title" "Runs"}}
+{{template "runs-strip" $d.Avail.Runs}}
+<p class="mt-1">{{$d.Avail.Summary}}</p>
+{{template "bands" $d.Avail.Bands}}
+<p class="mt-2 text-xs text-muted">Last {{$d.Avail.Lookback}} finished scans that covered this address; times in UTC.</p>
+</section>
+<section class="panel" aria-label="Changes of this asset">
+{{template "panel-title" "Changes of this asset"}}
+{{template "asset-changes" $d.Changes}}
+</section>
+</div>
+
+<section class="panel mt-4" aria-label="Availability this week">
+{{template "panel-title" "Availability this week"}}
+{{if $d.Avail.HasData}}{{template "heatmap" $d.Avail}}{{else}}<p class="text-muted">No finished scan covers this host yet.</p>{{end}}
+</section>
+
+<section class="panel mt-4" aria-label="Services">
+{{template "panel-title" "Services"}}
+{{if $d.Services}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Port</th><th>Product</th><th>Detections</th><th>Score</th></tr></thead>
+<tbody>{{range $d.Services}}<tr>
+<td class="font-mono"><a class="text-brand-fg underline" href="{{.Href}}">{{.Port}}</a>{{with .VHost}}<div class="text-xs text-muted">{{.}}</div>{{end}}{{if .Noted}} <span class="tag bg-info-bg text-fg">note</span>{{end}}</td>
+<td>{{template "cell" (dict "Value" .Product "Max" 60)}}</td>
+<td>{{range .Detections}}<span class="mr-1 inline-block">{{template "sev" .Severity}} {{template "cell" (dict "Value" .Name "Max" 40)}}</span>{{else}}<span class="text-dim">–</span>{{end}}</td>
+<td>{{template "score" .Score}}
+<details class="mt-1"><summary class="cursor-pointer text-xs text-muted">Why this score</summary><div class="mt-1">{{template "reasons" .Reasons}}</div></details></td>
+</tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No open services" "Text" "The latest finished scan found no open services on this host.")}}{{end}}
+</section>
+
+{{if $d.Findings}}<section class="panel mt-4" aria-label="Findings and remediation">
+{{template "panel-title" "CWE, ATT&CK and remediation"}}
+{{range $d.Findings}}<div class="item">{{template "sev" .Severity}} <b>{{template "cell" (dict "Value" .Name "Max" 60)}}</b> <span class="font-mono text-xs text-muted">{{.Port}}</span>
+<div>{{template "meta-tags" .}}</div>
+{{with .Remediation}}<p class="mt-1"><span class="lbl">Remediation</span><br>{{.}}</p>{{end}}</div>{{end}}
+</section>{{end}}
+
+{{template "annotation-panel" $d.Note}}
+{{end}}
