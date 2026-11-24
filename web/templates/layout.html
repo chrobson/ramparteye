@@ -24,7 +24,7 @@
 <body class="min-h-screen">
 <main class="flex min-h-screen items-center justify-center p-4">
 <div class="w-full max-w-md">
-<div class="mb-6 flex items-center justify-center gap-2 text-lg font-bold"><span class="eye" aria-hidden="true"></span>RampartEye</div>
+<div class="mb-6 flex items-center justify-center gap-2 text-lg font-bold"><img src="{{asset "logo.svg"}}" alt="" class="h-7 w-7">RampartEye</div>
 {{template "content" .}}
 </div>
 </main>
@@ -36,7 +36,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
 <title>{{template "title" .}} · RampartEye</title>
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/svg+xml" href="{{asset "favicon.svg"}}">
 <link rel="stylesheet" href="{{asset "app.css"}}">
 <script src="{{asset "app.js"}}"></script>
 <script src="{{asset "htmx.min.js"}}" defer></script>

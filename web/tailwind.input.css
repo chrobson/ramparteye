@@ -12,16 +12,6 @@
 }
 
 @layer components {
-  /* Brand mark: the watchful eye. */
-  .eye {
-    @apply relative inline-block h-3 w-[18px] shrink-0 rounded-full bg-brand;
-    box-shadow: 0 0 9px rgb(var(--c-brand));
-  }
-  .eye::after {
-    @apply absolute left-1.5 top-px h-2.5 w-1.5 rounded-full bg-bg;
-    content: "";
-  }
-
   .sidebar {
     @apply flex shrink-0 flex-col border-b border-line bg-side px-2 py-3 md:w-52 md:border-b-0 md:border-r;
   }

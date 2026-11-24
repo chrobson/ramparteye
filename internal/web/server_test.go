@@ -85,6 +85,19 @@ func TestStaticFiles(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, e.get("/static/missing.js", nil).Code)
 }
 
+func TestBrandIcons(t *testing.T) {
+	e := newEnv(t)
+
+	page := e.get("/login", nil).Body.String()
+	assert.Contain(t, `<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v=`, page)
+	assert.Contain(t, `<img src="/static/logo.svg?v=`, page)
+	for _, f := range []string{"/static/favicon.svg", "/static/logo.svg"} {
+		res := e.get(f, nil)
+		assert.Equal(t, http.StatusOK, res.Code, f)
+		assert.Contain(t, "image/svg+xml", res.Header().Get("Content-Type"), f)
+	}
+}
+
 func TestNotFoundThemed(t *testing.T) {
 	e := newEnv(t)
 

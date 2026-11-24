@@ -1,6 +1,6 @@
 {{/* Sidebar: brand and grouped navigation. Data: Shell. */}}
 {{define "sidebar"}}<aside class="sidebar">
-<a href="/" class="mb-2 flex items-center gap-2 px-2 py-1 text-base font-bold md:mb-4"><span class="eye" aria-hidden="true"></span>RampartEye</a>
+<a href="/" class="mb-2 flex items-center gap-2 px-2 py-1 text-base font-bold md:mb-4"><img src="{{asset "logo.svg"}}" alt="" class="h-6 w-6">RampartEye</a>
 <nav aria-label="Main" class="flex flex-wrap gap-x-1 md:block">
 {{- range .Nav}}
 <div class="nav-group">{{.Label}}</div>
