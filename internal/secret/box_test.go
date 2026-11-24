@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ctx42/testing/pkg/assert"
+	"github.com/ctx42/testing/pkg/must"
 )
 
 func testKey() []byte { return bytes.Repeat([]byte{7}, 32) }
@@ -23,15 +24,15 @@ func TestSealOpenRoundTrip(t *testing.T) {
 }
 
 func TestSealUsesFreshNonce(t *testing.T) {
-	box, _ := NewBox(testKey())
-	a, _ := box.Seal([]byte("x"), "a")
-	b, _ := box.Seal([]byte("x"), "a")
+	box := must.Value(NewBox(testKey()))
+	a := must.Value(box.Seal([]byte("x"), "a"))
+	b := must.Value(box.Seal([]byte("x"), "a"))
 	assert.False(t, bytes.Equal(a, b))
 }
 
 func TestOpenWrongAAD(t *testing.T) {
-	box, _ := NewBox(testKey())
-	ct, _ := box.Seal([]byte("x"), "right")
+	box := must.Value(NewBox(testKey()))
+	ct := must.Value(box.Seal([]byte("x"), "right"))
 
 	_, err := box.Open(ct, "wrong")
 
@@ -39,8 +40,8 @@ func TestOpenWrongAAD(t *testing.T) {
 }
 
 func TestOpenTamperedAndShort(t *testing.T) {
-	box, _ := NewBox(testKey())
-	ct, _ := box.Seal([]byte("x"), "a")
+	box := must.Value(NewBox(testKey()))
+	ct := must.Value(box.Seal([]byte("x"), "a"))
 	ct[len(ct)-1] ^= 1
 
 	_, err := box.Open(ct, "a")

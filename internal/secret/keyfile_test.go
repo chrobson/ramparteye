@@ -3,6 +3,7 @@ package secret
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/ctx42/testing/pkg/assert"
@@ -68,5 +69,74 @@ func TestLoadOrCreateRejectsBadArgs(t *testing.T) {
 	_, _, err := LoadOrCreate(t.TempDir(), "../key", 32, nil)
 	assert.Error(t, err)
 	_, _, err = LoadOrCreate(t.TempDir(), "key", 0, nil)
+	assert.Error(t, err)
+}
+
+func TestLoadOrCreateConcurrent(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "secrets")
+	const n = 16
+	keys := make([][]byte, n)
+	createdFlags := make([]bool, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			keys[i], createdFlags[i], errs[i] = LoadOrCreate(dir, "key", 32, nil)
+		}()
+	}
+	wg.Wait()
+
+	creators := 0
+	onDisk, err := os.ReadFile(filepath.Join(dir, "key"))
+	assert.NoError(t, err)
+	for i := range n {
+		assert.NoError(t, errs[i])
+		assert.Equal(t, onDisk, keys[i])
+		if createdFlags[i] {
+			creators++
+		}
+	}
+	assert.Equal(t, 1, creators)
+}
+
+func TestLoadOrCreateTightensDirMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "vol")
+	assert.NoError(t, os.Mkdir(dir, 0o755))
+	assert.NoError(t, os.Chmod(dir, 0o755))
+
+	_, _, err := LoadOrCreate(dir, "key", 32, nil)
+
+	assert.NoError(t, err)
+	di, err := os.Stat(dir)
+	assert.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o700), di.Mode().Perm())
+}
+
+func TestLoadOrCreateRefusesLooseMode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key")
+	assert.NoError(t, os.WriteFile(path, make([]byte, 32), 0o600))
+	assert.NoError(t, os.Chmod(path, 0o644))
+
+	_, _, err := LoadOrCreate(dir, "key", 32, nil)
+
+	assert.ErrorContain(t, "0644", err)
+}
+
+func TestLoadOrCreateRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "real")
+	assert.NoError(t, os.WriteFile(target, make([]byte, 32), 0o600))
+	assert.NoError(t, os.Symlink(target, filepath.Join(dir, "key")))
+
+	_, _, err := LoadOrCreate(dir, "key", 32, nil)
+
+	assert.ErrorContain(t, "not a regular file", err)
+}
+
+func TestLoadOrCreateRejectsEmptyDir(t *testing.T) {
+	_, _, err := LoadOrCreate("", "key", 32, nil)
 	assert.Error(t, err)
 }
