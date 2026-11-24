@@ -245,8 +245,6 @@ RAMPART_TZ=UTC
 # DefectDojo (the Settings page is the alternative; env values are read-only there).
 #RAMPART_DOJO_URL=
 #RAMPART_DOJO_TOKEN=
-#RAMPART_DOJO_USER=
-#RAMPART_DOJO_PASSWORD=
 #RAMPART_DOJO_PRODUCT_TYPE=RampartEye
 #RAMPART_DOJO_PRODUCT=
 #RAMPART_DOJO_ENGAGEMENT=Continuous discovery

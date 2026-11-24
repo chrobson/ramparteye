@@ -63,8 +63,6 @@ type Config struct {
 
 	DojoURL         string // RAMPART_DOJO_URL (empty = DefectDojo disabled)
 	DojoToken       string `json:"-"` // RAMPART_DOJO_TOKEN
-	DojoUser        string // RAMPART_DOJO_USER
-	DojoPassword    string `json:"-"` // RAMPART_DOJO_PASSWORD
 	DojoProductType string // RAMPART_DOJO_PRODUCT_TYPE, default "RampartEye"
 	DojoProduct     string // RAMPART_DOJO_PRODUCT
 	DojoEngagement  string // RAMPART_DOJO_ENGAGEMENT, default "Continuous discovery"
@@ -84,7 +82,6 @@ func (c Config) redacted() any {
 		return ""
 	}
 	p.DojoToken = mask(c.DojoToken != "")
-	p.DojoPassword = mask(c.DojoPassword != "")
 	p.SecretKey = nil
 	if len(c.SecretKey) > 0 {
 		p.SecretKey = []byte("[redacted]")
@@ -92,7 +89,7 @@ func (c Config) redacted() any {
 	return p
 }
 
-// String formats c with secrets (API token, password, secret key) masked.
+// String formats c with secrets (API token, secret key) masked.
 func (c Config) String() string { return fmt.Sprintf("%+v", c.redacted()) }
 
 // GoString is String for %#v.
@@ -159,8 +156,6 @@ func Load(env func(string) string) (Config, error) {
 		NmapPath:        str("RAMPART_NMAP_PATH", "nmap"),
 		DojoURL:         env("RAMPART_DOJO_URL"),
 		DojoToken:       env("RAMPART_DOJO_TOKEN"),
-		DojoUser:        env("RAMPART_DOJO_USER"),
-		DojoPassword:    env("RAMPART_DOJO_PASSWORD"),
 		DojoProductType: str("RAMPART_DOJO_PRODUCT_TYPE", DefaultDojoProductType),
 		DojoProduct:     env("RAMPART_DOJO_PRODUCT"),
 		DojoEngagement:  str("RAMPART_DOJO_ENGAGEMENT", DefaultDojoEngagement),

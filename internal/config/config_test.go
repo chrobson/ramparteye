@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -253,12 +255,12 @@ func TestLoadDojoFlags(t *testing.T) {
 }
 
 func TestConfigRedactsSecrets(t *testing.T) {
-	c := Config{DojoToken: "TOPSECRET", DojoPassword: "PWSECRET", SecretKey: []byte("KEYSECRET"), HTTPAddr: ":1"}
+	c := Config{DojoToken: "TOPSECRET", SecretKey: []byte("KEYSECRET"), HTTPAddr: ":1"}
 	for _, out := range []string{
 		fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c), fmt.Sprint(&c),
 		string(must.Value(json.Marshal(c))),
 	} {
-		for _, leak := range []string{"TOPSECRET", "PWSECRET", "KEYSECRET"} {
+		for _, leak := range []string{"TOPSECRET", "KEYSECRET"} {
 			assert.False(t, strings.Contains(out, leak), out)
 		}
 	}
@@ -299,4 +301,34 @@ func TestLoadPathProbesPerHost(t *testing.T) {
 
 	_, err = Load(envMap(map[string]string{"RAMPART_PATH_PROBES_PER_HOST": "-1"}))
 	assert.ErrorContain(t, "RAMPART_PATH_PROBES_PER_HOST must not be negative", err)
+}
+
+// composeOnly are .env variables read by compose.yml, not by the app.
+var composeOnly = map[string]bool{"RAMPART_IMAGE": true, "RAMPART_DB_PASSWORD": true, "RAMPART_BIND": true,
+	"RAMPART_PORT": true, "RAMPART_DB_PORT": true, "RAMPART_TZ": true}
+
+// The .env template written by install.sh lists exactly the variables the
+// app reads (plus the compose ones), so no documented setting is dead.
+func TestInstallEnvTemplateMatchesLoad(t *testing.T) {
+	read := map[string]bool{}
+	_, err := Load(func(k string) string { read[k] = true; return "" })
+	assert.NoError(t, err)
+
+	src := string(must.Value(os.ReadFile("../../install.sh")))
+	listed := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^#?(RAMPART_[A-Z_]+)=`).FindAllStringSubmatch(src, -1) {
+		listed[m[1]] = true
+	}
+	for k := range listed {
+		assert.True(t, read[k] || composeOnly[k], "install.sh lists %s, which the app does not read", k)
+	}
+	for k := range read {
+		switch k {
+		case "RAMPART_DATABASE_URL", "RAMPART_HTTP_ADDR", "RAMPART_SECRETS_DIR", "RAMPART_DEMO":
+			continue // set by compose
+		}
+		assert.True(t, listed[k], "the app reads %s, which install.sh does not list", k)
+	}
+	assert.False(t, read["RAMPART_DOJO_USER"])
+	assert.False(t, read["RAMPART_DOJO_PASSWORD"])
 }
