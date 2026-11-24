@@ -25,6 +25,7 @@ import (
 type View struct {
 	Shell *Shell
 	Ctx   context.Context
+	Flash string // one-time message from the previous request
 	Data  any
 }
 
@@ -94,6 +95,9 @@ func (s *Server) execute(w http.ResponseWriter, r *http.Request, status int, pag
 		return fmt.Errorf("unknown page %q", page)
 	}
 	v := View{Ctx: r.Context(), Data: data}
+	if _, ok := auth.CurrentUser(r.Context()); ok {
+		v.Flash = takeFlash(w, r)
+	}
 	layout := "bare"
 	if u, ok := auth.CurrentUser(r.Context()); ok && !u.MustChangePassword {
 		sh := s.shell(r, u)

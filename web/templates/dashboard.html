@@ -1,0 +1,83 @@
+{{define "title"}}Dashboard{{end}}
+{{define "content"}}{{$d := .Data}}
+<div class="grid gap-3 lg:grid-cols-[1.6fr_1fr] lg:gap-6">
+<div>
+<h1 class="text-[17px] font-semibold leading-snug">{{$d.Headline}}</h1>
+<p class="mt-1 text-muted">
+{{- if not $d.HasRuns}}{{$d.Sub}} <a class="text-brand-fg underline" href="/scans">Go to Scans</a>
+{{- else}}{{if eq $d.Urgent 0}}<span class="text-ok" aria-hidden="true">✓</span> {{end}}{{$d.Sub}}{{end}}</p>
+{{if $d.HasRuns}}<div class="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+<span class="text-ok">+ <b>{{$d.NewHosts}}</b> new hosts</span>
+<span class="text-ok">+ <b>{{$d.NewServices}}</b> new services</span>
+<span class="text-bad">− <b>{{$d.HostsGone}}</b> host{{if ne $d.HostsGone 1}}s{{end}} gone</span>
+<span>~ <b>{{$d.Changed}}</b> changed</span>
+<span>⇅ <b>{{$d.Unstable}}</b> unstable</span>
+</div>{{end}}
+</div>
+<dl class="grid grid-cols-2 gap-x-4 text-sm">
+{{template "kv" (dict "K" "Addresses in scope" "V" (num $d.AddrsInScope))}}
+{{template "kv" (dict "K" "Active hosts" "V" (num $d.ActiveHosts))}}
+{{template "kv" (dict "K" "Open services" "V" (num $d.OpenServices))}}
+{{template "kv" (dict "K" "Web services" "V" (num $d.WebServices))}}
+{{template "kv" (dict "K" "Findings" "V" (num $d.Findings))}}
+{{template "kv" (dict "K" "Admin panels" "V" (num $d.AdminPanels))}}
+</dl>
+</div>
+
+<section class="panel mt-4" aria-label="Live scans">
+{{template "panel-title" "Live scans"}}
+{{if can .Ctx "results.read"}}<div id="live-scans" hx-ext="sse" sse-connect="/events" sse-swap="live" aria-live="polite">{{template "live-runs" $d.Live}}</div>
+{{else}}{{template "live-runs" $d.Live}}{{end}}
+</section>
+
+<div class="mt-4 grid gap-3 lg:grid-cols-3">
+<section class="panel">
+{{template "panel-title" "Review first"}}
+{{range $d.Review}}{{template "service-item" .}}{{else}}<p class="text-muted">Nothing needs urgent attention.</p>{{end}}
+</section>
+<section class="panel">
+{{template "panel-title" "Latest changes"}}
+{{range $d.Changes}}<div class="item">{{template "change-tag" .Kind}} <span class="font-mono">{{.Endpoint}}</span>{{with .Detail}} <span class="text-muted">{{.}}</span>{{end}}<div class="font-mono text-xs text-muted">run #{{.RunID}}</div></div>
+{{else}}<p class="text-muted">No changes recorded yet.</p>{{end}}
+</section>
+<section class="panel">
+{{template "panel-title" "Interesting services"}}
+{{range $d.Interesting}}{{template "service-item" .}}{{else}}<p class="text-muted">No admin panels or staging environments found.</p>{{end}}
+</section>
+</div>
+
+<div class="mt-4 grid gap-3 lg:grid-cols-2">
+<section class="panel">
+{{template "panel-title" "Detections by category"}}
+{{template "bar-chart" (dict "Chart" $d.Categories "Title" "Detections by category" "Empty" "No detections yet.")}}
+</section>
+<section class="panel">
+{{template "panel-title" "Hosts by state"}}
+{{template "bar-chart" (dict "Chart" $d.HostStates "Title" "Hosts by state" "Empty" "No hosts tracked yet.")}}
+</section>
+</div>
+{{end}}
+
+{{define "kv"}}<div class="flex justify-between border-b border-row py-1"><dt>{{.K}}</dt><dd class="font-mono font-semibold">{{.V}}</dd></div>{{end}}
+
+{{define "service-item"}}<div class="item"><span class="font-medium">{{.Name}}</span> <span class="float-right">{{template "score" .Score}}</span>
+<div class="font-mono text-xs text-muted">{{.Endpoint}} · {{template "sev" .Severity}}{{with .Detail}} · {{.}}{{end}}</div></div>{{end}}
+
+{{/* Live scan panel body; also the SSE fragment. Data: []LiveRun. */}}
+{{define "live-runs"}}{{range .}}<div class="mb-3 last:mb-0">
+<span class="lbl">Scan #{{.RunID}}{{if .Finished}} finished: {{.Status}}{{else}} in progress{{end}}{{with .Name}} · profile "{{.}}"{{end}}</span>
+<div class="grid gap-4 sm:grid-cols-2">
+<div><b class="text-sm">{{.Percent}}%</b> complete
+<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{.Percent}}"><i class="bg-brand" style="width: {{.Percent}}%"></i></div></div>
+<div><b class="text-sm">{{num .PPS}}</b> pps{{if .Budget}} · run limit {{num .Budget}}{{end}}
+<div class="bar"><i class="bg-muted" style="width: {{.PPSPct}}%"></i></div></div>
+</div></div>
+{{else}}<p class="text-muted">No scan is running.</p>{{end}}{{end}}
+
+{{/* Inline SVG bar chart. Data: dict "Chart" BarChart "Title" "Empty". */}}
+{{define "bar-chart"}}{{$c := .Chart}}{{if not $c.Rows}}<p class="text-muted">{{.Empty}}</p>
+{{else}}<svg viewBox="0 0 {{$c.Width}} {{$c.Height}}" class="w-full max-w-md" role="img" aria-label="{{.Title}}" xmlns="http://www.w3.org/2000/svg">
+{{range $c.Rows}}<text x="0" y="{{.Y}}" dy="14" class="fill-muted text-[11px]">{{.Label}}</text>
+<rect x="{{$c.LabelW}}" y="{{.Y}}" width="{{.W}}" height="10" rx="2" transform="translate(0 4)" class="{{.Class}}"/>
+<text x="{{$c.CountX}}" y="{{.Y}}" dy="14" class="fill-fg font-mono text-[11px]">{{.Count}}</text>
+{{end}}</svg>{{end}}{{end}}

@@ -102,6 +102,18 @@
   .input {
     @apply w-full rounded border border-edge bg-field px-2 py-1.5 font-mono text-sm text-fg focus:border-brand focus:outline-none;
   }
+  .alert-ok {
+    @apply rounded border border-ok-line bg-new-bg px-3 py-2 text-ok;
+  }
+  .item {
+    @apply border-b border-row py-1.5 last:border-b-0;
+  }
+  .bar {
+    @apply relative my-1.5 h-1.5 rounded-full bg-line;
+  }
+  .bar > i {
+    @apply absolute inset-y-0 left-0 block rounded-full;
+  }
   .alert-error {
     @apply rounded border border-bad-line bg-gone-bg px-3 py-2 text-bad;
   }

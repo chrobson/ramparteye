@@ -21,6 +21,7 @@ import (
 	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/dojo"
+	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/scope"
 	"github.com/chrobson/ramparteye/internal/store"
@@ -66,6 +67,21 @@ type fakeStore struct {
 	sessions map[string]fakeSession
 	audit    []auditEntry
 	nextID   int64
+
+	dash dashData // dashboard fixtures
+}
+
+// dashData is what the fake store returns for the dashboard queries.
+type dashData struct {
+	targets  []model.Target
+	runs     []store.RunSummary
+	latest   int64
+	changes  []model.Change
+	hostObs  []model.HostObs
+	services []store.ExportService
+	states   []model.HostState
+	counts   map[model.HostStateKind]int
+	notes    map[model.AssetKey]store.Annotation
 }
 
 func newFakeStore() *fakeStore {
@@ -212,17 +228,29 @@ func (f *fakeStore) InsertAudit(_ context.Context, userID *int64, action, entity
 
 // fakeRunner reports fixed active runs.
 type fakeRunner struct {
+	events    chan runner.Event // Subscribe returns it when set
+	unsub     chan struct{}     // closed by the unsubscribe function when set
 	active    []int64
 	cancelled bool
+	cancelBy  int64
 }
 
 func (f *fakeRunner) Subscribe() (<-chan runner.Event, func()) {
+	if f.events != nil {
+		return f.events, func() {
+			select {
+			case <-f.unsub:
+			default:
+				close(f.unsub)
+			}
+		}
+	}
 	ch := make(chan runner.Event)
 	return ch, func() {}
 }
 
-func (f *fakeRunner) CancelAll(context.Context, int64) ([]int64, error) {
-	f.cancelled = true
+func (f *fakeRunner) CancelAll(_ context.Context, by int64) ([]int64, error) {
+	f.cancelled, f.cancelBy = true, by
 	return f.active, nil
 }
 
@@ -346,3 +374,45 @@ func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	}
 	return nil
 }
+
+func (f *fakeStore) Targets(context.Context, string) ([]model.Target, error) {
+	return f.dash.targets, nil
+}
+
+func (f *fakeStore) Runs(context.Context, int) ([]store.RunSummary, error) {
+	return f.dash.runs, nil
+}
+
+func (f *fakeStore) LatestDoneRun(context.Context) (int64, error) { return f.dash.latest, nil }
+
+func (f *fakeStore) Changes(context.Context, int64) ([]model.Change, error) {
+	return f.dash.changes, nil
+}
+
+func (f *fakeStore) RunHostObs(context.Context, int64) ([]model.HostObs, error) {
+	return f.dash.hostObs, nil
+}
+
+func (f *fakeStore) ExportServices(context.Context, int64) ([]store.ExportService, error) {
+	return f.dash.services, nil
+}
+
+func (f *fakeStore) HostStates(_ context.Context, state model.HostStateKind) ([]model.HostState, error) {
+	var out []model.HostState
+	for _, h := range f.dash.states {
+		if state == "" || h.State == state {
+			out = append(out, h)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) HostStateCounts(context.Context) (map[model.HostStateKind]int, error) {
+	return f.dash.counts, nil
+}
+
+func (f *fakeStore) AnnotationsByIPs(context.Context, []netip.Addr) (map[model.AssetKey]store.Annotation, error) {
+	return f.dash.notes, nil
+}
+
+func mustAddr(s string) netip.Addr { return netip.MustParseAddr(s) }

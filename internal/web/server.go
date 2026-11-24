@@ -23,6 +23,7 @@ import (
 	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/dojo"
+	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/scope"
 	"github.com/chrobson/ramparteye/internal/store"
@@ -37,6 +38,17 @@ type Store interface {
 	SetPassword(ctx context.Context, userID int64, hash string, mustChange bool) error
 	DeleteUserSessions(ctx context.Context, userID int64) error
 	InsertAudit(ctx context.Context, userID *int64, action, entity string, details any) error
+
+	// Dashboard.
+	Targets(ctx context.Context, tag string) ([]model.Target, error)
+	Runs(ctx context.Context, limit int) ([]store.RunSummary, error)
+	LatestDoneRun(ctx context.Context) (int64, error)
+	Changes(ctx context.Context, runID int64) ([]model.Change, error)
+	RunHostObs(ctx context.Context, runID int64) ([]model.HostObs, error)
+	ExportServices(ctx context.Context, runID int64) ([]store.ExportService, error)
+	HostStates(ctx context.Context, state model.HostStateKind) ([]model.HostState, error)
+	HostStateCounts(ctx context.Context) (map[model.HostStateKind]int, error)
+	AnnotationsByIPs(ctx context.Context, ips []netip.Addr) (map[model.AssetKey]store.Annotation, error)
 }
 
 // Runner is the scan runner as the UI sees it; *runner.Runner satisfies it.
@@ -149,7 +161,14 @@ func (s *Server) Handler() http.Handler {
 		r.With(auth.RequireUser).Post(auth.PasswordPath, s.passwordSubmit)
 
 		// Placeholder pages; Tasks 21-24 replace them.
+		r.With(s.require(auth.PermResultsRead)).Get("/", s.dashboard)
+		r.With(s.require(auth.PermResultsRead)).Get("/events", s.events)
+		r.With(s.require(auth.PermScansRun)).Post("/scans/cancel-all", s.cancelAll)
+
 		for _, n := range navItems {
+			if n.Href == "/" {
+				continue
+			}
 			r.With(s.require(n.Perm)).Get(n.Href, s.stubPage(n.Label))
 		}
 	})
