@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-db test-db-down vet css css-check image e2e shellcheck
+.PHONY: build test test-integration test-db test-db-down vet fmt-check css css-check image e2e shellcheck
 
 VERSION ?= dev
 
@@ -7,6 +7,9 @@ build:
 
 vet:
 	go vet ./...
+
+fmt-check:
+	@test -z "$$(gofmt -l .)" || { gofmt -l .; echo 'gofmt: files above need formatting'; exit 1; }
 
 test: vet
 	go test -race ./...

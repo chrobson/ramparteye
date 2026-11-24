@@ -83,8 +83,8 @@ since they hold only the hosts of their file). Change kinds:
 - `changed`: product or version of a service changed;
 - `unstable`: a host flipped up/down at least 2 times within the last 5 runs.
 
-A host missing from 3 consecutive runs becomes inactive. Latency changes of 300 ms or more are
-recorded. The dashboard turns the latest diff into a plain-language headline; the Changes page
+A host missing from 3 consecutive runs becomes inactive. A latency change is recorded
+when the response time changes by more than 300 ms and at least doubles or halves. The dashboard turns the latest diff into a plain-language headline; the Changes page
 is the timeline of all diffs.
 
 ## Data model

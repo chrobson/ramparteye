@@ -24,7 +24,7 @@ type composeFile struct {
 	Networks map[string]struct {
 		Name     string `yaml:"name"`
 		Internal bool   `yaml:"internal"`
-		IPAM struct {
+		IPAM     struct {
 			Config []struct {
 				Subnet string `yaml:"subnet"`
 			} `yaml:"config"`

@@ -103,7 +103,8 @@ HTTP probes run at 20 requests/s with a burst of 5 and only send `GET`/`HEAD`.
 | `RAMPART_UNSTABLE_IF_FLIPS` | `2` | A host is unstable after this many up/down flips... |
 | `RAMPART_UNSTABLE_WINDOW` | `5` | ...within this many recent runs (at least `RAMPART_UNSTABLE_IF_FLIPS`). |
 
-A latency change of 300 ms or more between runs is reported; a host keeps the history of its
+A latency change is reported when the response time changes by more than 300 ms between runs
+and at least doubles or halves; a host keeps the history of its
 last 30 runs in the drilldown.
 
 ### Server
