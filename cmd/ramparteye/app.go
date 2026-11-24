@@ -250,6 +250,8 @@ type shutdownSteps struct {
 	stopHTTP    func(ctx context.Context) error // drains the HTTP server
 	loopDone    <-chan struct{}                 // closed when the scheduler loop returned
 	waitRuns    func()                          // returns when every run has stopped
+	waitPushes  func()                          // returns when DefectDojo pushes in flight have finished
+	pushBudget  time.Duration                   // bounds waitPushes, separately from the budget
 	closePusher func(ctx context.Context) error // cancels and waits for DefectDojo pushes
 }
 
@@ -257,7 +259,9 @@ type shutdownSteps struct {
 // for before the pusher closes, so no OnRunDone call can follow Close.
 // A step still running when the budget is spent is logged and abandoned;
 // the pusher is then closed with the expired context, which cancels its
-// pushes in flight without waiting.
+// pushes in flight without waiting. waitPushes, when set, first lets the
+// pushes in flight finish within pushBudget (the CLI scan, whose run just
+// ended); serve leaves it unset and cancels them.
 func shutdown(log *slog.Logger, budget time.Duration, s shutdownSteps) {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
@@ -281,6 +285,18 @@ func shutdown(log *slog.Logger, budget time.Duration, s shutdownSteps) {
 		if !waitDone(ctx, runsDone) {
 			log.Warn("scans still stopping at exit", "budget", budget.String())
 		}
+	}
+	if s.waitPushes != nil {
+		pushesDone := make(chan struct{})
+		go func() {
+			s.waitPushes()
+			close(pushesDone)
+		}()
+		pctx, pcancel := context.WithTimeout(context.Background(), s.pushBudget)
+		if !waitDone(pctx, pushesDone) {
+			log.Warn("DefectDojo pushes still running; cancelling them", "budget", s.pushBudget.String())
+		}
+		pcancel()
 	}
 	if s.closePusher != nil {
 		if err := s.closePusher(ctx); err != nil {

@@ -19,6 +19,10 @@ import (
 // updates to cover exactly the given targets.
 const cliProfileName = "CLI"
 
+// cliPushBudget bounds how long `scan` waits for the automatic DefectDojo
+// push of its run before exiting.
+const cliPushBudget = 2 * time.Minute
+
 const scanUsage = "usage: ramparteye scan --profile NAME | ramparteye scan <target>..."
 
 type scanArgs struct {
@@ -77,7 +81,7 @@ func cmdScan(e *env, args []string) int {
 	if err != nil {
 		return e.fail("scan", err)
 	}
-	s := newScanner(cfg, st, sc, box, log, nil)
+	s := newScanner(cfg, st, sc, box, log, e.nmap)
 	// No Recover here: a running `serve` owns the chunks it leases.
 	if err := s.runner.LoadSignatures(ctx); err != nil {
 		return e.fail("scan", err)
@@ -95,7 +99,10 @@ func cmdScan(e *env, args []string) int {
 		close(idle)
 	}()
 	followRun(events, idle, runID, e.stderr)
-	shutdown(log, shutdownBudget, shutdownSteps{waitRuns: s.runner.Wait, closePusher: s.pusher.Close})
+	// The automatic DefectDojo push of the finished run gets cliPushBudget
+	// to complete before the pusher closes.
+	shutdown(log, shutdownBudget, shutdownSteps{waitRuns: s.runner.Wait,
+		waitPushes: s.pusher.Wait, pushBudget: cliPushBudget, closePusher: s.pusher.Close})
 
 	// The summary is read even after Ctrl+C, which paused the run.
 	rctx := context.WithoutCancel(ctx)

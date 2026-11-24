@@ -149,6 +149,55 @@ func TestShutdownBudgetBoundsRunnerWait(t *testing.T) {
 	assert.Contain(t, "scans still stopping at exit", logs.String())
 }
 
+func TestShutdownWaitsForPushesBeforeClose(t *testing.T) {
+	var mu sync.Mutex
+	var steps []string
+	rec := func(s string) {
+		mu.Lock()
+		defer mu.Unlock()
+		steps = append(steps, s)
+	}
+	pushed := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		rec("push done")
+		close(pushed)
+	}()
+
+	shutdown(slog.New(slog.DiscardHandler), time.Second, shutdownSteps{
+		waitRuns:   func() { rec("wait runs") },
+		waitPushes: func() { <-pushed },
+		pushBudget: time.Second,
+		closePusher: func(ctx context.Context) error {
+			rec("close pusher")
+			return nil
+		},
+	})
+
+	assert.Equal(t, []string{"wait runs", "push done", "close pusher"}, steps)
+}
+
+func TestShutdownPushBudgetBoundsPushWait(t *testing.T) {
+	var logs bytes.Buffer
+	stuck := make(chan struct{})
+	defer close(stuck)
+	closed := false
+	t0 := time.Now()
+
+	shutdown(slog.New(slog.NewTextHandler(&logs, nil)), time.Second, shutdownSteps{
+		waitPushes: func() { <-stuck },
+		pushBudget: 50 * time.Millisecond,
+		closePusher: func(ctx context.Context) error {
+			closed = true
+			return nil
+		},
+	})
+
+	assert.True(t, time.Since(t0) < 500*time.Millisecond)
+	assert.True(t, closed)
+	assert.Contain(t, "DefectDojo pushes still running", logs.String())
+}
+
 func TestLoadBoxWithoutCreate(t *testing.T) {
 	dir := t.TempDir()
 	_, _, err := loadBox(&config.Config{SecretsDir: dir}, false)

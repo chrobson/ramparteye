@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/chrobson/ramparteye/internal/config"
+	"github.com/chrobson/ramparteye/internal/scan"
 	"github.com/chrobson/ramparteye/internal/web"
 )
 
@@ -37,6 +38,8 @@ type env struct {
 	openExchange func(ctx context.Context, cfg config.Config) (web.Exchange, func(), error)
 	// onListen, when set, is told the address `serve` listens on.
 	onListen func(addr string)
+	// nmap replaces the nmap binary in `scan` (nil = the real one).
+	nmap scan.Scanner
 }
 
 // command is one subcommand; args excludes the program and command names.

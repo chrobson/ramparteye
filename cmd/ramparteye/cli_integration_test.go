@@ -443,3 +443,39 @@ func TestDBCommandsIntegration(t *testing.T) {
 		})
 	}
 }
+
+// `ramparteye scan` lets the automatic DefectDojo push of its run finish
+// before it exits.
+func TestScanCommandFinishesAutoPushIntegration(t *testing.T) {
+	ctx := context.Background()
+	pool, dbURL := migrated(t)
+	st := store.New(pool)
+	dd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/reimport-scan/" {
+			http.Error(w, "unexpected", http.StatusBadRequest)
+			return
+		}
+		time.Sleep(200 * time.Millisecond) // a push still in flight when the run ends
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"test": 3, "statistics": {}}`))
+	}))
+	defer dd.Close()
+	secrets := t.TempDir()
+	_, _, err := loadBox(&config.Config{SecretsDir: secrets}, true)
+	assert.NoError(t, err)
+	e, out, errb := testEnv(map[string]string{"RAMPART_DATABASE_URL": dbURL, "RAMPART_SECRETS_DIR": secrets,
+		"RAMPART_ALLOWED_CIDRS": "127.0.0.1/32", "RAMPART_DOJO_URL": dd.URL, "RAMPART_DOJO_TOKEN": "tok",
+		"RAMPART_DOJO_PRODUCT": "Perimeter"})
+	e.nmap = fakeNmap{}
+
+	code := e.run([]string{"ramparteye", "scan", "127.0.0.1"})
+
+	assert.Equal(t, 0, code, errb.String())
+	assert.Contain(t, "done", out.String())
+	assert.NotContain(t, "context canceled", errb.String())
+	pushes, err := st.DojoPushes(ctx, 10)
+	assert.NoError(t, err)
+	assert.Len(t, 1, pushes)
+	assert.Equal(t, "auto", pushes[0].Trigger)
+	assert.True(t, pushes[0].OK, pushes[0].Error)
+}
