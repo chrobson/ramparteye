@@ -505,3 +505,99 @@ func TestReportStatus(t *testing.T) {
 	both := Receipt{NmapPackets: 10, HTTPOther: 1} // a failure outranks unmeasured
 	assert.Equal(t, ReportFailed, BuildReport(both).Status)
 }
+
+func TestScopeUncheckedInvocations(t *testing.T) {
+	t0 := time.Unix(0, 0)
+	m := NewMeter()
+	m.AddNmap(Invocation{Argv: []string{"a"}, Start: t0, End: t0.Add(time.Second),
+		Targets: []netip.Prefix{pfx("10.0.0.1/32")}})
+	m.AddNmap(Invocation{Argv: []string{"b"}, Start: t0, End: t0.Add(time.Second)}) // no operands
+
+	rep := BuildReport(m.Receipt(allowPrefix{pfx("10.0.0.0/8")}))
+
+	got := checkByName(t, rep, "scope respected")
+	assert.Equal(t, StatusUnmeasured, got.Status) // the run without targets was never checked
+	assert.Equal(t, 1, rep.UncheckedInvocations)
+
+	// An address outside the scope is a failure even when others are unchecked.
+	m.AddNmap(Invocation{Argv: []string{"c"}, Targets: []netip.Prefix{pfx("192.168.0.1/32")}})
+	got = checkByName(t, BuildReport(m.Receipt(allowPrefix{pfx("10.0.0.0/8")})), "scope respected")
+	assert.Equal(t, StatusFail, got.Status)
+}
+
+func TestDrainNilAllowlistKeepsTargetsPending(t *testing.T) {
+	allow := allowPrefix{pfx("10.0.0.0/8")}
+	m := NewMeter()
+	m.AddNmap(Invocation{Argv: []string{"a"}, Targets: []netip.Prefix{pfx("10.0.0.0/30")}})
+
+	first := m.Drain(nil)
+
+	assert.Equal(t, 1, first.UncheckedInvocations)
+	assert.Equal(t, int64(0), first.TargetsChecked)
+	assert.Equal(t, StatusUnmeasured, checkByName(t, BuildReport(first), "scope respected").Status)
+
+	m.AddNmap(Invocation{Argv: []string{"b"}, Targets: []netip.Prefix{pfx("192.168.0.1/32")}})
+	second := m.Drain(allow)
+
+	assert.Equal(t, int64(5), second.TargetsChecked) // 4 pending + 1 new
+	assert.Equal(t, int64(1), second.TargetsOutsideAllowlist)
+	assert.Equal(t, -1, second.UncheckedInvocations) // the pending run is resolved
+	assert.Equal(t, 0, first.UncheckedInvocations+second.UncheckedInvocations)
+
+	m.AddNmap(Invocation{Argv: []string{"c"}, Targets: []netip.Prefix{pfx("10.0.1.1/32")}})
+	third := m.Drain(allow)
+	assert.Equal(t, int64(1), third.TargetsChecked) // pending was cleared
+	assert.Equal(t, 0, third.UncheckedInvocations)
+}
+
+func TestRestoreAfterFailedSave(t *testing.T) {
+	allow := allowPrefix{pfx("10.0.0.0/8")}
+	m := NewMeter()
+	m.SetBudget(Budget{PathProbesPerHost: 2})
+	t0 := time.Unix(0, 0)
+	req := must.Value(http.NewRequest("GET", "http://x/", nil))
+	a := netip.MustParseAddr("10.0.0.1")
+	m.AddNmap(Invocation{Argv: []string{"a"}, Packets: 100, Raw: true, Elapsed: 2 * time.Second,
+		Start: t0, End: t0.Add(2 * time.Second), Targets: []netip.Prefix{pfx("10.0.0.1/32")}})
+	m.CountHTTP(req)
+	m.ProbeGate(a)
+	m.AddWebServices(1)
+	lost := m.Drain(allow)
+
+	m.Restore(lost)
+	m.AddNmap(Invocation{Argv: []string{"b"}, Packets: 50, Elapsed: time.Second,
+		Start: t0.Add(5 * time.Second), End: t0.Add(6 * time.Second), Targets: []netip.Prefix{pfx("10.0.0.2/32")}})
+	got := m.Drain(allow)
+
+	assert.Equal(t, int64(150), got.NmapPackets)
+	assert.Equal(t, 2, got.NmapInvocations)
+	assert.Equal(t, 1, got.NmapRawReported)
+	assert.Equal(t, int64(3000), got.NmapBusyMs) // 2 s restored + 1 s new
+	assert.Equal(t, int64(2), got.TargetsChecked)
+	assert.Equal(t, int64(1), got.HTTPGet)
+	assert.Equal(t, int64(1), got.PathProbes)
+	assert.Equal(t, int64(1), got.PathProbeGateCalls)
+	assert.Equal(t, int64(1), got.PathProbeWebServices)
+	assert.Equal(t, map[string]int{"10.0.0.1": 1}, got.ProbeHosts)
+	assert.Equal(t, lost.ArgvSample[0], got.ArgvSample[0])
+	// The probe still counts once against the budget.
+	assert.True(t, m.ProbeGate(a))
+	assert.False(t, m.ProbeGate(a))
+}
+
+func TestPathProbeSignatureCountUnknown(t *testing.T) {
+	m := NewMeter()
+	m.AddWebServices(3)
+
+	got := checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget")
+	assert.Equal(t, StatusUnmeasured, got.Status)
+	assert.Contain(t, "unknown", got.Detail)
+
+	m.SetPathSignatures(0)
+	got = checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget")
+	assert.Equal(t, StatusPass, got.Status)
+	assert.Contain(t, "no path-probe signatures", got.Detail)
+
+	m.SetPathSignatures(2)
+	assert.Equal(t, StatusUnmeasured, checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget").Status)
+}

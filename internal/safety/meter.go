@@ -19,6 +19,7 @@ import (
 	"hash"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -78,11 +79,24 @@ type acc struct {
 	httpAuth int64
 	peakRPS  int
 
+	noTargets int // invocations without any target operand: never checkable
+	targetInv int // invocations whose targets are in targets
+	rest      restState
+
 	probes    map[netip.Addr]int
 	refused   int64
 	gateCalls int64
 	webSvcs   int64
 	outside   int64
+}
+
+// restState is what Restore carries that has no live representation (nmap
+// busy intervals, checked target counts, command line hash).
+type restState struct {
+	busyMs, checked, outside int64
+	unchecked                int
+	sha                      string
+	sample                   []string
 }
 
 func newAcc() acc {
@@ -107,9 +121,16 @@ type Meter struct {
 
 	window []time.Time // request times of the last second, kept across Drain
 
-	budget   Budget
-	base     map[netip.Addr]int // probes per host already drained or seeded
-	pathSigs int
+	budget        Budget
+	base          map[netip.Addr]int // probes per host already drained or seeded
+	pathSigs      int
+	pathSigsKnown bool // SetPathSignatures was called
+
+	// Targets of invocations drained with a nil allowlist; they are checked
+	// by the next Drain with one. pendingInv counts their invocations, which
+	// were already reported as unchecked.
+	pending    []netip.Prefix
+	pendingInv int
 
 	tw    Window
 	hasTW bool
@@ -183,14 +204,15 @@ func (m *Meter) SeedProbes(counts map[netip.Addr]int) {
 }
 
 // SetPathSignatures records how many enabled signatures send path probes.
-// If there are some and ProbeGate was never consulted, the "path probe
-// budget" check is unmeasured rather than passed.
+// If web services were evaluated and ProbeGate was never consulted, the
+// "path probe budget" check is unmeasured rather than passed, also when this
+// was never called (the count is then unknown).
 func (m *Meter) SetPathSignatures(n int) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
-	m.pathSigs = n
+	m.pathSigs, m.pathSigsKnown = n, true
 	m.mu.Unlock()
 }
 
@@ -235,6 +257,11 @@ func (m *Meter) AddNmap(inv Invocation) {
 	c.argvHash.Write([]byte{'\n'})
 	if len(c.argvSample) < SampleArgv {
 		c.argvSample = append(c.argvSample, line)
+	}
+	if len(inv.Targets) == 0 {
+		c.noTargets++
+	} else {
+		c.targetInv++
 	}
 	c.targets = append(c.targets, inv.Targets...)
 }
@@ -400,6 +427,10 @@ type Receipt struct {
 
 	TargetsChecked          int64 `json:"targets_checked"`
 	TargetsOutsideAllowlist int64 `json:"targets_outside_allowlist"`
+	// UncheckedInvocations counts nmap runs whose targets were never
+	// re-checked against the scope. In a Drain delta it can be negative when
+	// earlier unchecked targets were checked.
+	UncheckedInvocations int `json:"unchecked_invocations"`
 
 	TimeWindow    string `json:"time_window"` // "HH:MM-HH:MM" or empty
 	OutsideWindow int64  `json:"outside_window"`
@@ -410,8 +441,11 @@ type Receipt struct {
 	PathProbesMaxHost int   `json:"path_probes_max_host"` // busiest host, accumulated over resumes
 	// PathProbeSignatures is how many enabled signatures send path probes;
 	// PathProbeGateCalls how often the gate was consulted.
-	PathProbeSignatures int   `json:"path_probe_signatures"`
-	PathProbeGateCalls  int64 `json:"path_probe_gate_calls"`
+	PathProbeSignatures int `json:"path_probe_signatures"`
+	// PathProbeSignaturesKnown is false when the runner never reported the
+	// signature count.
+	PathProbeSignaturesKnown bool  `json:"path_probe_signatures_known"`
+	PathProbeGateCalls       int64 `json:"path_probe_gate_calls"`
 	// PathProbeWebServices is how many web services were evaluated.
 	PathProbeWebServices int64 `json:"path_probe_web_services"`
 	// ProbeHosts is the per-host probe count of this Drain; Save adds it to
@@ -456,7 +490,13 @@ func (m *Meter) Receipt(allow Allowlist) Receipt {
 
 // Drain returns the measurements since the previous Drain and resets them,
 // so the result can be added to the stored receipt exactly once. Always call
-// Save with Drain output, never with a repeated Receipt.
+// Save with Drain output, never with a repeated Receipt. If Save fails, call
+// Restore with the same Receipt so the delta is not lost.
+//
+// With a nil allowlist the targets are not checked: the invocations count as
+// unchecked in this delta and their targets are kept and checked by the next
+// Drain with an allowlist, whose delta then takes them off the unchecked
+// count again (UncheckedInvocations may be negative there).
 func (m *Meter) Drain(allow Allowlist) Receipt {
 	if m == nil {
 		return Receipt{}
@@ -467,8 +507,59 @@ func (m *Meter) Drain(allow Allowlist) Receipt {
 	for h, n := range m.cur.probes {
 		m.base[h] += n
 	}
+	if allow == nil {
+		m.pending = append(m.pending, m.cur.targets...)
+		m.pendingInv += m.cur.targetInv
+	} else {
+		m.pending, m.pendingInv = nil, 0
+	}
 	m.cur = newAcc()
 	return r
+}
+
+// Restore adds a delta returned by Drain back into the meter, for when
+// saving it failed. Nmap busy time, checked target counts and the command
+// line hash are carried as numbers, so the next Drain reports them again.
+func (m *Meter) Restore(r Receipt) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c := &m.cur
+	c.invocations += r.NmapInvocations
+	c.rawReported += r.NmapRawReported
+	c.packets += r.NmapPackets
+	c.elapsed += time.Duration(r.NmapElapsedMs) * time.Millisecond
+	c.peakInvPPS = max(c.peakInvPPS, r.NmapPeakInvPPS)
+	c.methods[http.MethodGet] += int(r.HTTPGet)
+	c.methods[http.MethodHead] += int(r.HTTPHead)
+	if r.HTTPOther > 0 {
+		c.methods["OTHER"] += int(r.HTTPOther)
+	}
+	c.httpAuth += r.HTTPAuth
+	c.peakRPS = max(c.peakRPS, int(r.HTTPPeakRPS))
+	c.outside += r.OutsideWindow
+	c.refused += r.PathProbesRefused
+	c.gateCalls += r.PathProbeGateCalls
+	c.webSvcs += r.PathProbeWebServices
+	for h, n := range r.ProbeHosts {
+		a, err := netip.ParseAddr(h)
+		if err != nil {
+			continue
+		}
+		a = a.Unmap()
+		m.base[a] = max(m.base[a]-n, 0)
+		c.probes[a] += n
+	}
+	c.rest.busyMs += r.NmapBusyMs
+	c.rest.checked += r.TargetsChecked
+	c.rest.outside += r.TargetsOutsideAllowlist
+	c.rest.unchecked += r.UncheckedInvocations
+	if c.rest.sha == "" {
+		c.rest.sha = r.ArgvSHA256
+	}
+	c.rest.sample = append(c.rest.sample, r.ArgvSample...)
 }
 
 func (m *Meter) receiptLocked(allow Allowlist) Receipt {
@@ -478,13 +569,18 @@ func (m *Meter) receiptLocked(allow Allowlist) Receipt {
 	r.NmapRawReported = c.rawReported
 	r.NmapPackets = c.packets
 	r.NmapElapsedMs = c.elapsed.Milliseconds()
-	r.NmapBusyMs = busyTime(c.busy).Milliseconds()
+	r.NmapBusyMs = busyTime(c.busy).Milliseconds() + c.rest.busyMs
 	r.NmapPeakInvPPS = c.peakInvPPS
 	r.ConfiguredMaxRate, r.PolicyPPS = m.budget.RunPPS, m.budget.PolicyPPS
-	if c.invocations > 0 {
+	if len(c.argvSample) > 0 {
 		r.ArgvSHA256 = hex.EncodeToString(c.argvHash.Sum(nil))
+	} else {
+		r.ArgvSHA256 = c.rest.sha
 	}
-	r.ArgvSample = append([]string(nil), c.argvSample...)
+	r.ArgvSample = append(append([]string(nil), c.rest.sample...), c.argvSample...)
+	if len(r.ArgvSample) > SampleArgv {
+		r.ArgvSample = r.ArgvSample[:SampleArgv]
+	}
 	for method, n := range c.methods {
 		switch method {
 		case http.MethodGet:
@@ -498,21 +594,27 @@ func (m *Meter) receiptLocked(allow Allowlist) Receipt {
 	r.HTTPAuth = c.httpAuth
 	r.HTTPPeakRPS = float64(c.peakRPS)
 	if allow != nil {
-		for _, p := range c.targets {
+		for _, p := range append(slices.Clone(m.pending), c.targets...) {
 			n := addrCount(p)
 			r.TargetsChecked += n
 			if allow.CheckPrefix(p) != nil {
 				r.TargetsOutsideAllowlist += n
 			}
 		}
+		r.UncheckedInvocations = c.noTargets - m.pendingInv
+	} else {
+		r.UncheckedInvocations = c.noTargets + c.targetInv
 	}
+	r.TargetsChecked += c.rest.checked
+	r.TargetsOutsideAllowlist += c.rest.outside
+	r.UncheckedInvocations += c.rest.unchecked
 	if m.hasTW {
 		r.TimeWindow = m.tw.String()
 	}
 	r.OutsideWindow = c.outside
 	r.PathProbeBudget = max(m.budget.PathProbesPerHost, 0)
 	r.PathProbesRefused = c.refused
-	r.PathProbeSignatures = m.pathSigs
+	r.PathProbeSignatures, r.PathProbeSignaturesKnown = m.pathSigs, m.pathSigsKnown
 	r.PathProbeGateCalls = c.gateCalls
 	r.PathProbeWebServices = c.webSvcs
 	if len(c.probes) > 0 {

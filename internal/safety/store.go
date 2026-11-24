@@ -39,9 +39,17 @@ func Save(ctx context.Context, db DB, r Receipt) error {
 	if sample == nil {
 		sample = []string{}
 	}
-	hosts, counts := make([]string, 0, len(r.ProbeHosts)), make([]int32, 0, len(r.ProbeHosts))
+	norm := make(map[string]int32, len(r.ProbeHosts))
 	for h, n := range r.ProbeHosts {
-		hosts, counts = append(hosts, h), append(counts, int32(n))
+		a, err := netip.ParseAddr(h)
+		if err != nil {
+			return fmt.Errorf("save safety receipt run %d: probe host %q: %w", r.RunID, h, err)
+		}
+		norm[a.Unmap().WithZone("").String()] += int32(n)
+	}
+	hosts, counts := make([]string, 0, len(norm)), make([]int32, 0, len(norm))
+	for h, n := range norm {
+		hosts, counts = append(hosts, h), append(counts, n)
 	}
 	_, err := db.Exec(ctx, `
 WITH probes AS (
@@ -55,8 +63,8 @@ INSERT INTO run_safety (run_id, nmap_invocations, nmap_raw_reported, nmap_packet
     http_get, http_head, http_other, http_auth_headers, http_peak_rps, http_rate_limit, http_burst,
     targets_checked, targets_outside_allowlist,
     policy_pps, path_probe_budget, path_probes, path_probes_refused,
-    time_window, outside_window, path_probe_signatures, path_probe_gate_calls, path_probe_web_services, updated_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$30,$31, now())
+    time_window, outside_window, path_probe_signatures, path_probe_gate_calls, path_probe_web_services, unchecked_invocations, path_probe_signatures_known, updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$30,$31,$32,$33, now())
 ON CONFLICT (run_id) DO UPDATE SET
     nmap_invocations = run_safety.nmap_invocations + EXCLUDED.nmap_invocations,
     nmap_raw_reported = run_safety.nmap_raw_reported + EXCLUDED.nmap_raw_reported,
@@ -88,13 +96,16 @@ ON CONFLICT (run_id) DO UPDATE SET
     path_probe_signatures = GREATEST(run_safety.path_probe_signatures, EXCLUDED.path_probe_signatures),
     path_probe_gate_calls = run_safety.path_probe_gate_calls + EXCLUDED.path_probe_gate_calls,
     path_probe_web_services = run_safety.path_probe_web_services + EXCLUDED.path_probe_web_services,
+    unchecked_invocations = run_safety.unchecked_invocations + EXCLUDED.unchecked_invocations,
+    path_probe_signatures_known = run_safety.path_probe_signatures_known OR EXCLUDED.path_probe_signatures_known,
     updated_at = now()`,
 		r.RunID, r.NmapInvocations, r.NmapRawReported, r.NmapPackets, r.NmapElapsedMs,
 		r.NmapBusyMs, float32(r.NmapPeakInvPPS), r.ConfiguredMaxRate, r.PerWorkerRate, r.ArgvSHA256, sample,
 		r.HTTPGet, r.HTTPHead, r.HTTPOther, r.HTTPAuth, float32(r.HTTPPeakRPS), float32(r.HTTPRateLimit), r.HTTPBurst,
 		r.TargetsChecked, r.TargetsOutsideAllowlist,
 		r.PolicyPPS, r.PathProbeBudget, r.PathProbes, r.PathProbesRefused,
-		r.TimeWindow, r.OutsideWindow, r.PathProbeSignatures, hosts, counts, r.PathProbeGateCalls, r.PathProbeWebServices)
+		r.TimeWindow, r.OutsideWindow, r.PathProbeSignatures, hosts, counts, r.PathProbeGateCalls, r.PathProbeWebServices,
+		r.UncheckedInvocations, r.PathProbeSignaturesKnown)
 	if err != nil {
 		return fmt.Errorf("save safety receipt run %d: %w", r.RunID, err)
 	}
@@ -112,7 +123,7 @@ SELECT nmap_invocations, nmap_raw_reported, nmap_packets, nmap_elapsed_ms, nmap_
     targets_checked, targets_outside_allowlist,
     policy_pps, path_probe_budget, path_probes, path_probes_refused,
     (SELECT coalesce(max(probes), 0) FROM run_safety_probes WHERE run_id = $1),
-    time_window, outside_window, path_probe_signatures, path_probe_gate_calls, path_probe_web_services, updated_at
+    time_window, outside_window, path_probe_signatures, path_probe_gate_calls, path_probe_web_services, unchecked_invocations, path_probe_signatures_known, updated_at
 FROM run_safety WHERE run_id = $1`, runID).Scan(
 		&r.NmapInvocations, &r.NmapRawReported, &r.NmapPackets, &r.NmapElapsedMs, &r.NmapBusyMs,
 		&peakInv, &r.ConfiguredMaxRate, &r.PerWorkerRate, &r.ArgvSHA256, &r.ArgvSample,
@@ -120,7 +131,7 @@ FROM run_safety WHERE run_id = $1`, runID).Scan(
 		&r.TargetsChecked, &r.TargetsOutsideAllowlist,
 		&r.PolicyPPS, &r.PathProbeBudget, &r.PathProbes, &r.PathProbesRefused,
 		&r.PathProbesMaxHost,
-		&r.TimeWindow, &r.OutsideWindow, &r.PathProbeSignatures, &r.PathProbeGateCalls, &r.PathProbeWebServices, &r.UpdatedAt)
+		&r.TimeWindow, &r.OutsideWindow, &r.PathProbeSignatures, &r.PathProbeGateCalls, &r.PathProbeWebServices, &r.UncheckedInvocations, &r.PathProbeSignaturesKnown, &r.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrNoReceipt
 	}

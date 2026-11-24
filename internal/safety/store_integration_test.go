@@ -108,3 +108,30 @@ func TestSaveDrainIsIdempotent(t *testing.T) {
 	assert.Equal(t, 1, got.PathProbesMaxHost)
 	assert.Equal(t, int64(1), got.PathProbeGateCalls)
 }
+
+func TestSaveNormalisesProbeHosts(t *testing.T) {
+	pool, runID := newRun(t)
+	ctx := context.Background()
+
+	r := safety.Receipt{RunID: runID, ProbeHosts: map[string]int{"::ffff:10.0.0.1": 1, "10.0.0.1": 2, "fe80::1%eth0": 1}}
+	assert.NoError(t, safety.Save(ctx, pool, r))
+
+	probes, err := safety.LoadProbes(ctx, pool, runID)
+	assert.NoError(t, err)
+	assert.Equal(t, map[netip.Addr]int{netip.MustParseAddr("10.0.0.1"): 3, netip.MustParseAddr("fe80::1"): 1}, probes)
+
+	bad := safety.Receipt{RunID: runID, ProbeHosts: map[string]int{"not-an-ip": 1}}
+	assert.Error(t, safety.Save(ctx, pool, bad))
+}
+
+func TestSaveUncheckedAccumulatesAndResolves(t *testing.T) {
+	pool, runID := newRun(t)
+	ctx := context.Background()
+	assert.NoError(t, safety.Save(ctx, pool, safety.Receipt{RunID: runID, UncheckedInvocations: 2, PathProbeSignaturesKnown: true}))
+	assert.NoError(t, safety.Save(ctx, pool, safety.Receipt{RunID: runID, UncheckedInvocations: -2}))
+
+	got, err := safety.Load(ctx, pool, runID)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, got.UncheckedInvocations)
+	assert.True(t, got.PathProbeSignaturesKnown)
+}

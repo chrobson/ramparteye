@@ -66,9 +66,13 @@ func BuildReport(r Receipt) Report {
 
 	// Scope.
 	switch {
-	case r.NmapInvocations > 0 && r.TargetsChecked == 0:
-		add("scope respected", StatusUnmeasured, "0 checked",
-			"%d nmap runs but no target address was re-checked against the scope", r.NmapInvocations)
+	case r.TargetsOutsideAllowlist > 0:
+		add("scope respected", StatusFail, fmt.Sprintf("%d outside", r.TargetsOutsideAllowlist),
+			"%d addresses re-checked after the run, %d outside the allowed scope",
+			r.TargetsChecked, r.TargetsOutsideAllowlist)
+	case r.UncheckedInvocations > 0:
+		add("scope respected", StatusUnmeasured, fmt.Sprintf("%d unchecked", r.UncheckedInvocations),
+			"%d nmap runs whose targets were never re-checked against the scope", r.UncheckedInvocations)
 	default:
 		add("scope respected", passIf(r.TargetsOutsideAllowlist == 0),
 			fmt.Sprintf("%d outside", r.TargetsOutsideAllowlist),
@@ -143,11 +147,16 @@ func BuildReport(r Receipt) Report {
 		budget = fmt.Sprint(r.PathProbeBudget)
 	}
 	probeMeasured := fmt.Sprintf("%d max per host", r.PathProbesMaxHost)
-	gateUnused := r.PathProbeSignatures > 0 && r.PathProbeGateCalls == 0 && r.PathProbes == 0 && r.PathProbesRefused == 0
+	gateUnused := r.PathProbeGateCalls == 0 && r.PathProbes == 0 && r.PathProbesRefused == 0
 	switch {
 	case gateUnused && r.PathProbeWebServices == 0:
-		add("path probe budget", StatusPass, probeMeasured,
-			"not applicable: no web services were evaluated (%d path-probe signatures enabled)", r.PathProbeSignatures)
+		add("path probe budget", StatusPass, probeMeasured, "not applicable: no web services")
+	case gateUnused && r.PathProbeSignaturesKnown && r.PathProbeSignatures == 0:
+		add("path probe budget", StatusPass, probeMeasured, "not applicable: no path-probe signatures enabled")
+	case gateUnused && !r.PathProbeSignaturesKnown:
+		add("path probe budget", StatusUnmeasured, probeMeasured,
+			"%d web services evaluated, the probe gate was never consulted and the number of path-probe signatures is unknown",
+			r.PathProbeWebServices)
 	case gateUnused:
 		add("path probe budget", StatusUnmeasured, probeMeasured,
 			"%d web services evaluated with %d path-probe signatures but the probe gate was never consulted",
