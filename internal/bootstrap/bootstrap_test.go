@@ -146,7 +146,7 @@ func TestEnsureUsesBcrypt(t *testing.T) {
 
 func TestGeneratePasswordAlphabet(t *testing.T) {
 	for range 50 {
-		pw, err := generatePassword()
+		pw, err := GeneratePassword()
 		assert.NoError(t, err)
 		assert.True(t, len(pw) >= 20)
 		for _, r := range pw {

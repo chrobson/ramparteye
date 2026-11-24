@@ -63,7 +63,7 @@ func ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer, has
 	passwords := make([]string, len(accounts))
 	users := make([]model.NewUser, len(accounts))
 	for i, a := range accounts {
-		pw, err := generatePassword()
+		pw, err := GeneratePassword()
 		if err != nil {
 			return Result{}, err
 		}
@@ -99,7 +99,9 @@ func ensure(ctx context.Context, st Store, cfg config.Config, out io.Writer, has
 	return Result{AdminCreated: true, DemoAccounts: cfg.Demo}, nil
 }
 
-func generatePassword() (string, error) {
+// GeneratePassword returns a random 24-character password (also used by
+// `ramparteye reset-admin`).
+func GeneratePassword() (string, error) {
 	max := big.NewInt(int64(len(alphabet)))
 	b := make([]byte, passwordLength)
 	for i := range b {
