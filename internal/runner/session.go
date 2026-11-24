@@ -156,11 +156,23 @@ func (r *Runner) execute(c *control, runID int64, cfg store.ScanConfig, schedule
 	}
 	ctx = safety.WithMeter(ctx, s.meter)
 	// When the outcome cannot be read, the run is saved as paused (best
-	// effort) so the scheduler resumes it; it is never left running.
+	// effort) so the scheduler resumes it; it is never left running. A run
+	// cancelled before it started is saved cancelled.
+	pause := func(msg string) {
+		if c.abort.Err() != nil {
+			settle(store.RunCancelled, store.RunCancelled)
+			return
+		}
+		settle(store.RunPaused, store.RunPaused+"; "+msg)
+	}
+	if c.abort.Err() != nil {
+		settle(store.RunCancelled, store.RunCancelled)
+		return
+	}
 	ok, err := r.st.StartRun(ctx, runID)
 	if err != nil {
 		s.log.Error("scan run not started", "err", err)
-		settle(store.RunPaused, store.RunPaused+"; start: "+err.Error())
+		pause("start: " + err.Error())
 		return
 	}
 	if !ok { // finished meanwhile, e.g. cancelled while it was launched
@@ -170,7 +182,7 @@ func (r *Runner) execute(c *control, runID int64, cfg store.ScanConfig, schedule
 	counts, err := r.st.CountChunks(ctx, runID)
 	if err != nil {
 		s.log.Error("scan run not started", "err", err)
-		settle(store.RunPaused, store.RunPaused+"; count chunks: "+err.Error())
+		pause("count chunks: " + err.Error())
 		return
 	}
 	s.total = counts.Pending + counts.Running + counts.Done + counts.Failed
@@ -387,22 +399,35 @@ func (r *Runner) retryStale(ctx context.Context) {
 	}
 	r.mu.Unlock()
 	for id, sr := range stale {
-		log := r.cfg.Log.With("run", id)
-		status := sr.status
-		if !finalStatus(status) {
-			if ok, err := r.st.CancelRequested(ctx, id); err != nil {
-				log.Warn("cancel request not checked", "err", err)
-			} else if ok {
-				status = store.RunCancelled
-			}
-		}
-		applied, err := r.st.FinishRun(ctx, id, status, sr.active)
-		if err != nil {
-			log.Error("scan run status still not saved", "status", status, "err", err)
-			continue
-		}
-		r.statusStored(ctx, Event{RunID: id, Kind: EventFinished}, status, applied, sr.active, status)
+		r.retryStaleRun(ctx, id, sr)
 	}
+}
+
+// retryStaleRun stores the status of one stale run within dbTimeout; a
+// panic is logged and the run stays stale.
+func (r *Runner) retryStaleRun(ctx context.Context, id int64, sr staleRun) {
+	log := r.cfg.Log.With("run", id)
+	defer func() {
+		if p := recover(); p != nil {
+			log.Error("retrying scan run status panicked", "panic", p, "stack", string(debug.Stack()))
+		}
+	}()
+	dbctx, cancel := context.WithTimeout(ctx, dbTimeout)
+	defer cancel()
+	status := sr.status
+	if !finalStatus(status) {
+		if ok, err := r.st.CancelRequested(dbctx, id); err != nil {
+			log.Warn("cancel request not checked", "err", err)
+		} else if ok {
+			status = store.RunCancelled
+		}
+	}
+	applied, err := r.st.FinishRun(dbctx, id, status, sr.active)
+	if err != nil {
+		log.Error("scan run status still not saved", "status", status, "err", err)
+		return
+	}
+	r.statusStored(ctx, Event{RunID: id, Kind: EventFinished}, status, applied, sr.active, status)
 }
 
 // runEnded calls OnRunDone once per run.

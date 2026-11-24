@@ -147,12 +147,15 @@ func (s *Store) LastRun(ctx context.Context, configID int64) (*RunInfo, error) {
 	return &r, nil
 }
 
-// OpenRuns lists scan runs that are not finished, not stopped by a user and
-// not cancelled (no cancel request), so a cancelled run is never resumed.
+// OpenRuns lists scan runs that are not finished and not stopped by a user.
+// A queued or paused run with a cancel request is left out, so a cancelled
+// run is never resumed; a running one is kept, so the scheduler still sees
+// that its profile is busy in the process that will cancel it.
 func (s *Store) OpenRuns(ctx context.Context) ([]RunInfo, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+runInfoCols+` FROM scan_runs r
 		WHERE kind = 'scan' AND status IN ('queued', 'running', 'paused') AND NOT stopped
-		AND NOT EXISTS (SELECT 1 FROM run_cancel_requests c WHERE c.run_id = r.id) ORDER BY id`)
+		AND (status = 'running' OR NOT EXISTS (SELECT 1 FROM run_cancel_requests c WHERE c.run_id = r.id))
+		ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}

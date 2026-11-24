@@ -136,8 +136,13 @@ func TestCancelRuns(t *testing.T) {
 	run := must.Value(s.Run(ctx, a))
 	assert.Equal(t, store.RunCancelled, run.Status)
 	assert.NotNil(t, run.FinishedAt)
-	// A run with a cancel request is never resumed.
+	// A queued or paused run with a cancel request is never resumed; a
+	// running one stays listed so its profile is seen busy.
 	assert.Len(t, 0, must.Value(s.OpenRuns(ctx)))
+	assert.True(t, must.Value(s.StartRun(ctx, b)))
+	open := must.Value(s.OpenRuns(ctx))
+	assert.Len(t, 1, open)
+	assert.Equal(t, b, open[0].ID)
 }
 
 // A final status is never overwritten: neither a late FinishRun nor
@@ -201,7 +206,9 @@ func TestCancelOpenRuns(t *testing.T) {
 	var by int64
 	must.Nil(pool.QueryRow(ctx, `SELECT requested_by FROM run_cancel_requests WHERE run_id = $1`, running).Scan(&by))
 	assert.Equal(t, uid, by)
-	assert.Len(t, 0, must.Value(s.OpenRuns(ctx)))
+	open := must.Value(s.OpenRuns(ctx)) // the running one stays visible
+	assert.Len(t, 1, open)
+	assert.Equal(t, running, open[0].ID)
 
 	// Again: only the still running run, already requested (idempotent).
 	requested, finished, err = s.CancelOpenRuns(ctx, nil)

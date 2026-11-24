@@ -276,3 +276,52 @@ func TestRetryBackoffCapped(t *testing.T) {
 	f.r.backoff(ctx, 10)
 	assert.True(t, time.Since(start) < time.Second) // returns when ctx ends
 }
+
+// A panic while leasing a batch fails the chunks already leased for it.
+func TestLeasePanicSettlesLeasedChunks(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	f.fs.configs[0].Workers = 1
+	f.r.cfg.ChunkBits = 25 // two /25 chunks; the sizer asks for a /24
+	f.r.st = &panickingLeaseStore{fakeStore: f.fs}
+	runID := f.runNow(t)
+
+	assert.Equal(t, store.RunFailed, f.fs.runStatus(runID))
+	statuses := map[string]int{}
+	for _, c := range f.fs.chunksOf(runID) {
+		statuses[c.status]++
+	}
+	assert.Equal(t, map[string]int{store.ChunkFailed: 1, store.ChunkPending: 1}, statuses)
+}
+
+// panickingLeaseStore panics on the second LeaseChunk call.
+type panickingLeaseStore struct {
+	*fakeStore
+	calls int
+}
+
+func (s *panickingLeaseStore) LeaseChunk(ctx context.Context, runID int64) (store.Chunk, bool, error) {
+	s.calls++
+	if s.calls == 2 {
+		panic("lease exploded")
+	}
+	return s.fakeStore.LeaseChunk(ctx, runID)
+}
+
+// A panic while retrying a stale run is contained; the run stays stale.
+func TestRetryStalePanicContained(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	f.fs.finishFails = 1
+	runID := f.runNow(t)
+	f.r.st = &panickingFinishStore{fakeStore: f.fs}
+
+	f.r.Tick(context.Background(), time.Now())
+	f.r.Wait()
+	assert.True(t, f.r.isStale(runID))
+	assert.Equal(t, store.RunRunning, f.fs.runStatus(runID))
+}
+
+type panickingFinishStore struct{ *fakeStore }
+
+func (s *panickingFinishStore) FinishRun(context.Context, int64, string, time.Duration) (bool, error) {
+	panic("finish exploded")
+}

@@ -166,7 +166,7 @@ func TestCancelAllAudit(t *testing.T) {
 	assert.Equal(t, "scans.cancel_all", a.action)
 	assert.Equal(t, "scan_runs", a.entity)
 	assert.Equal(t, int64(3), *a.userID)
-	assert.Equal(t, map[string]any{"runs": []int64{runID}}, a.details)
+	assert.Equal(t, map[string]any{"requested": []int64{runID}}, a.details)
 	by, ok := f.fs.cancelReqs[runID]
 	assert.True(t, ok)
 	assert.Equal(t, int64(3), *by)
@@ -238,4 +238,88 @@ func TestCancelRequestedWhilePausing(t *testing.T) {
 
 	assert.True(t, waitDone(f.r, 5*time.Second))
 	assert.Equal(t, store.RunCancelled, f.fs.runStatus(runID))
+}
+
+// A run launched here between CancelAll's first sweep of the active runs
+// and the stored cancel requests is cancelled at once too, not only at its
+// next chunk boundary.
+func TestCancelAllCatchesLateLaunch(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	f.sc.setBlock(pfx("10.20.0.0/24"), true)
+	f.sc.started = make(chan netip.Prefix, 8)
+	var runID int64
+	f.fs.onCancel = func() {
+		f.fs.onCancel = nil
+		runID = must.Value(f.r.Start(context.Background(), f.cfg.ID))
+		<-f.sc.started // running, nmap blocked
+	}
+
+	ids, err := f.r.CancelAll(context.Background(), 1)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{runID}, ids)
+	assert.True(t, waitDone(f.r, 5*time.Second))
+	assert.Equal(t, store.RunCancelled, f.fs.runStatus(runID))
+}
+
+// A run running in another process keeps its profile occupied while its
+// cancel request is pending: the scheduler starts no second run.
+func TestCancelRequestedRunElsewhereOccupiesProfile(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	f.fs.configs[0].EveryMinutes = ptr(1)
+	ctx := context.Background()
+	runID := must.Value(f.r.createRun(ctx, f.fs.configs[0]))
+	assert.True(t, must.Value(f.fs.StartRun(ctx, runID)))
+	f.fs.requestCancel(runID)
+
+	f.r.Tick(ctx, time.Now().Add(time.Hour))
+	f.r.Wait()
+
+	assert.Equal(t, 1, f.fs.runCount())
+	assert.Equal(t, 0, f.sc.discoverCount())
+}
+
+// The attempt is audited even when the cancel requests cannot be stored;
+// runs executing here are still cancelled.
+func TestCancelAllStoreFailure(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	runID := startBlocked(t, f)
+	f.fs.cancelFail = true
+
+	ids, err := f.r.CancelAll(context.Background(), 2)
+
+	assert.Error(t, err)
+	assert.Equal(t, []int64{runID}, ids)
+	assert.True(t, waitDone(f.r, 5*time.Second))
+	assert.Equal(t, store.RunCancelled, f.fs.runStatus(runID))
+	audits := f.fs.auditLog()
+	assert.Len(t, 1, audits)
+	assert.Equal(t, AuditCancelAll, audits[0].action)
+	d := audits[0].details.(map[string]any)
+	assert.Equal(t, []int64{runID}, d["requested"])
+	assert.Contain(t, "database unavailable", d["error"].(string))
+}
+
+// A session whose run is cancelled before it started settles cancelled
+// (never "paused; start: context canceled"); a run already cancelled in the
+// store is not started at all.
+func TestCancelledBeforeStart(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	h := &hookRecorder{}
+	f.r.OnRunDone = h.hook
+	ctx := context.Background()
+	runID := must.Value(f.r.createRun(ctx, f.cfg))
+	c := newControl(ctx, time.Time{})
+	c.cancel(ErrRunCancelled)
+	f.r.execute(c, runID, f.cfg, time.Time{})
+	assert.Equal(t, store.RunCancelled, f.fs.runStatus(runID))
+	assert.Equal(t, 0, f.sc.discoverCount())
+	assert.Equal(t, []string{store.RunCancelled}, h.got())
+
+	runID = must.Value(f.r.createRun(ctx, f.cfg))
+	f.fs.setStatus(runID, store.RunCancelled) // CancelAll got there first
+	f.r.execute(newControl(ctx, time.Time{}), runID, f.cfg, time.Time{})
+	assert.Equal(t, store.RunCancelled, f.fs.runStatus(runID))
+	assert.Equal(t, 0, f.sc.discoverCount())
+	assert.Len(t, 1, h.got())
 }

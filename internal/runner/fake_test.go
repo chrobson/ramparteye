@@ -47,6 +47,8 @@ type fakeStore struct {
 
 	cancelReqs map[int64]*int64 // run id -> requested by
 	audits     []fakeAudit
+	onCancel   func() // called by CancelOpenRuns before its transaction
+	cancelFail bool   // CancelOpenRuns fails
 }
 
 type fakeAudit struct {
@@ -160,7 +162,7 @@ func (f *fakeStore) OpenRuns(context.Context) ([]store.RunInfo, error) {
 	defer f.mu.Unlock()
 	var out []store.RunInfo
 	for _, r := range f.runs {
-		if _, req := f.cancelReqs[r.ID]; req {
+		if _, req := f.cancelReqs[r.ID]; req && r.Status != store.RunRunning {
 			continue
 		}
 		switch r.Status {
@@ -172,7 +174,10 @@ func (f *fakeStore) OpenRuns(context.Context) ([]store.RunInfo, error) {
 	return out, nil
 }
 
-func (f *fakeStore) StartRun(_ context.Context, runID int64) (bool, error) {
+func (f *fakeStore) StartRun(ctx context.Context, runID int64) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.runs[runID]
@@ -325,8 +330,14 @@ func (f *fakeStore) FinishRun(_ context.Context, runID int64, status string, act
 }
 
 func (f *fakeStore) CancelOpenRuns(_ context.Context, by *int64) ([]int64, []int64, error) {
+	if f.onCancel != nil {
+		f.onCancel()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.cancelFail {
+		return nil, nil, errors.New("database unavailable")
+	}
 	requested, finished := []int64{}, []int64{}
 	for _, r := range f.runs {
 		switch r.Status {

@@ -241,46 +241,69 @@ func (r *Runner) Stop(runID int64) bool {
 	return ok
 }
 
-// CancelAll cancels every unfinished scan run, here and in other processes,
-// on behalf of user by (0 = system). Runs executing in this process are
-// cancelled at once: their nmap processes are killed, interrupted chunks
-// return to pending, the safety receipt is saved and the run ends
-// cancelled; post-processing stops and the diff is not applied. A cancel
-// request is stored for every unfinished run, so another process stops its
-// runs at its next chunk boundary and no cancelled run is ever resumed;
-// queued and paused runs are marked cancelled at once. OnRunDone gets
-// "cancelled". It returns the ids of the runs cancelled, ascending, and
-// records the audit entry AuditCancelAll.
+// CancelAll requests the cancel of every unfinished scan run, here and in
+// other processes, on behalf of user by (0 = system). Runs executing in
+// this process are cancelled at once: their nmap processes are killed,
+// interrupted chunks return to pending, the safety receipt is saved and the
+// run ends cancelled; post-processing stops and the diff is not applied. A
+// cancel request is stored for every unfinished run, so another process
+// stops its runs at its next chunk boundary and no cancelled run is ever
+// resumed; queued and paused runs are marked cancelled at once. OnRunDone
+// gets "cancelled".
+//
+// It is a point-in-time sweep: runs created after its transaction are not
+// covered. It returns the ids of the runs a cancel was requested for,
+// ascending (a run that finished meanwhile keeps its own final status), and
+// records the audit entry AuditCancelAll, also when storing the requests
+// failed.
 func (r *Runner) CancelAll(ctx context.Context, by int64) ([]int64, error) {
 	var actor *int64
 	if by > 0 {
 		actor = &by
 	}
-	r.mu.Lock()
-	ids := make([]int64, 0, len(r.active))
-	for id, a := range r.active {
-		a.ctl.cancel(ErrRunCancelled)
-		ids = append(ids, id)
+	// The store writes outlive a cancelled caller.
+	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
+	defer cancel()
+	ids := r.cancelActive(nil)
+	requested, finished, err := r.st.CancelOpenRuns(dbctx, actor)
+	// A run launched here between the first sweep and the transaction is
+	// running in the store: cancel it at once too.
+	if err == nil {
+		ids = append(ids, r.cancelActive(requested)...)
 	}
-	r.mu.Unlock()
-
-	requested, finished, err := r.st.CancelOpenRuns(ctx, actor)
+	ids = append(ids, requested...)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	details := map[string]any{"requested": ids}
 	if err != nil {
-		slices.Sort(ids)
-		return ids, fmt.Errorf("store cancel requests: %w", err)
+		err = fmt.Errorf("store cancel requests: %w", err)
+		details["error"] = err.Error()
 	}
 	for _, id := range finished {
 		r.publish(Event{RunID: id, Kind: EventFinished, Progress: 1, Message: store.RunCancelled})
 		r.runEnded(context.WithoutCancel(ctx), id, store.RunCancelled)
 	}
-	ids = append(ids, requested...)
-	slices.Sort(ids)
-	ids = slices.Compact(ids)
-	r.cfg.Log.Info("all scan runs cancelled", "runs", ids, "by", by)
-	if err := r.st.InsertAudit(ctx, actor, AuditCancelAll, "scan_runs", map[string]any{"runs": ids}); err != nil {
-		return ids, fmt.Errorf("audit: %w", err)
+	r.cfg.Log.Info("scan runs cancel requested", "runs", ids, "by", by, "err", err)
+	if aerr := r.st.InsertAudit(dbctx, actor, AuditCancelAll, "scan_runs", details); aerr != nil {
+		err = errors.Join(err, fmt.Errorf("audit: %w", aerr))
 	}
-	return ids, nil
+	return ids, err
+}
+
+// cancelActive cancels the runs executing in this process (all of them
+// when only is nil, else those listed) and returns their ids.
+func (r *Runner) cancelActive(only []int64) []int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var ids []int64
+	for id, a := range r.active {
+		if only != nil && !slices.Contains(only, id) {
+			continue
+		}
+		a.ctl.cancel(ErrRunCancelled)
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 // Wait blocks until every run started by Start or Tick has stopped.

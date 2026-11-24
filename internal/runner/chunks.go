@@ -38,8 +38,8 @@ func (r *Runner) worker(ctx context.Context, s *session) (err error) {
 		if r.cancelRequested(ctx, s) {
 			return nil
 		}
-		var lerr error
-		batch, lerr = r.leaseBatch(ctx, s)
+		batch = nil
+		lerr := r.leaseBatch(ctx, s, &batch)
 		for _, g := range s.partition(batch) {
 			if err := r.scanGroup(ctx, s, g); err != nil {
 				return err
@@ -72,22 +72,23 @@ func (r *Runner) abandon(ctx context.Context, s *session, batch []store.Chunk, r
 
 // leaseBatch leases chunks until they cover the address count the sizer
 // asks for (at least one chunk, at most maxGroupChunks).
-func (r *Runner) leaseBatch(ctx context.Context, s *session) ([]store.Chunk, error) {
+// Each chunk is appended to *batch as soon as it is leased, so a panic
+// midway still sees it.
+func (r *Runner) leaseBatch(ctx context.Context, s *session, batch *[]store.Chunk) error {
 	want := uint64(s.sizer.Next())
-	var batch []store.Chunk
 	var addrs uint64
-	for len(batch) < maxGroupChunks && (len(batch) == 0 || addrs < want) {
+	for len(*batch) < maxGroupChunks && (len(*batch) == 0 || addrs < want) {
 		c, ok, err := r.st.LeaseChunk(ctx, s.runID)
 		if err != nil {
-			return batch, err
+			return err
 		}
 		if !ok {
 			break
 		}
-		batch = append(batch, c)
+		*batch = append(*batch, c)
 		addrs += target.AddrCount(c.Prefix)
 	}
-	return batch, nil
+	return nil
 }
 
 // partition splits a batch into groups scanned with the same options, so
