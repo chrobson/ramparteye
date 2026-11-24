@@ -1,0 +1,158 @@
+{
+  "findings": [
+    {
+      "title": "Technology detected: WordPress",
+      "severity": "Info",
+      "description": "Signature `wordpress` matched.\n\n- Host: 10.20.0.11\n- Hostname: web.lab.test\n- Port: 443/tcp\n- Category: cms\n- Confidence: 90%\n- URL: https://10.20.0.11/\n- HTTP status: 200\n- Page title: Welcome\n\nEvidence:\n\n- meta_generator: WordPress 6.5",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:sig:10.20.0.11:443:wordpress",
+      "vuln_id_from_tool": "wordpress",
+      "endpoints": [
+        {
+          "host": "10.20.0.11",
+          "port": 443,
+          "protocol": "https"
+        }
+      ],
+      "tags": [
+        "cms",
+        "rampart"
+      ]
+    },
+    {
+      "title": "Admin panel detected: phpMyAdmin",
+      "severity": "Medium",
+      "description": "Signature `phpmyadmin` matched.\n\n- Host: 10.20.0.14\n- Port: 80/tcp\n- Category: admin-panel\n- Confidence: 100%\n- URL: http://10.20.0.14/\n- HTTP status: 200\n- Page title: phpMyAdmin\n\nEvidence:\n\n- title: phpMyAdmin",
+      "cwe": 668,
+      "mitigation": "Restrict phpMyAdmin to the administration network.",
+      "references": "https://docs.phpmyadmin.net/en/latest/setup.html#securing-your-phpmyadmin-installation\nhttps://cwe.mitre.org/data/definitions/668.html\nhttps://attack.mitre.org/techniques/T1078/\nhttps://attack.mitre.org/techniques/T1190/",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:sig:10.20.0.14:80:phpmyadmin",
+      "vuln_id_from_tool": "phpmyadmin",
+      "endpoints": [
+        {
+          "host": "10.20.0.14",
+          "port": 80,
+          "protocol": "http"
+        }
+      ],
+      "tags": [
+        "admin-panel",
+        "attack-t1078",
+        "attack-t1190",
+        "rampart"
+      ]
+    },
+    {
+      "title": "Staging environment detected: Staging banner",
+      "severity": "Medium",
+      "description": "Signature `staging-banner` matched.\n\n- Host: 10.20.0.21\n- Port: 8080/tcp\n- Category: staging\n- Confidence: 80%\n- URL: http://10.20.0.21:8080/\n- HTTP status: 200\n- Page title: STAGING - shop",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:sig:10.20.0.21:8080:staging-banner",
+      "vuln_id_from_tool": "staging-banner",
+      "endpoints": [
+        {
+          "host": "10.20.0.21",
+          "port": 8080,
+          "protocol": "http"
+        }
+      ],
+      "tags": [
+        "rampart",
+        "staging"
+      ]
+    },
+    {
+      "title": "Open service 22/tcp OpenSSH 9.6p1",
+      "severity": "Low",
+      "description": "Service detected by RampartEye.\n\n- Host: 10.20.0.11\n- Port: 22/tcp\n- Product: OpenSSH\n- Version: 9.6p1\n- Extra info: protocol 2.0\n\nAnalyst comment:\n\n> Disable after the migration.",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:svc:10.20.0.11:22/tcp",
+      "endpoints": [
+        {
+          "host": "10.20.0.11",
+          "port": 22,
+          "protocol": "tcp"
+        }
+      ],
+      "tags": [
+        "legacy-ssh",
+        "owner:ops",
+        "rampart",
+        "service"
+      ]
+    },
+    {
+      "title": "Open service 443/tcp nginx 1.27.4",
+      "severity": "Info",
+      "description": "Service detected by RampartEye.\n\n- Host: 10.20.0.11\n- Hostname: web.lab.test\n- Port: 443/tcp\n- Product: nginx\n- Version: 1.27.4\n- CPE: cpe:/a:f5:nginx:1.27.4\n- URL: https://10.20.0.11/\n- HTTP status: 200\n- Page title: Welcome\n- Technologies: WordPress",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:svc:10.20.0.11:443/tcp",
+      "endpoints": [
+        {
+          "host": "10.20.0.11",
+          "port": 443,
+          "protocol": "https"
+        }
+      ],
+      "tags": [
+        "rampart",
+        "service"
+      ]
+    },
+    {
+      "title": "Open service 80/tcp Apache httpd 2.4.62",
+      "severity": "Info",
+      "description": "Service detected by RampartEye.\n\n- Host: 10.20.0.14\n- Port: 80/tcp\n- Product: Apache httpd\n- Version: 2.4.62\n- URL: http://10.20.0.14/\n- HTTP status: 200\n- Page title: phpMyAdmin\n- Technologies: phpMyAdmin",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:svc:10.20.0.14:80/tcp",
+      "endpoints": [
+        {
+          "host": "10.20.0.14",
+          "port": 80,
+          "protocol": "http"
+        }
+      ],
+      "tags": [
+        "rampart",
+        "service"
+      ]
+    },
+    {
+      "title": "Open service 8080/tcp Jetty",
+      "severity": "Info",
+      "description": "Service detected by RampartEye.\n\n- Host: 10.20.0.21\n- Port: 8080/tcp\n- Product: Jetty\n- URL: http://10.20.0.21:8080/\n- HTTP status: 200\n- Page title: STAGING - shop\n- Technologies: Staging banner",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:svc:10.20.0.21:8080/tcp",
+      "endpoints": [
+        {
+          "host": "10.20.0.21",
+          "port": 8080,
+          "protocol": "http"
+        }
+      ],
+      "tags": [
+        "rampart",
+        "service"
+      ]
+    },
+    {
+      "title": "Open service 53/udp dnsmasq 2.90",
+      "severity": "Info",
+      "description": "Service detected by RampartEye.\n\n- Host: 10.20.0.30\n- Port: 53/udp\n- Product: dnsmasq\n- Version: 2.90",
+      "date": "2026-11-21",
+      "unique_id_from_tool": "rampart:svc:10.20.0.30:53/udp",
+      "endpoints": [
+        {
+          "host": "10.20.0.30",
+          "port": 53,
+          "protocol": "udp"
+        }
+      ],
+      "tags": [
+        "rampart",
+        "service"
+      ]
+    }
+  ]
+}
