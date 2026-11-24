@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -304,4 +305,18 @@ func TestSettingsRedactToken(t *testing.T) {
 		assert.False(t, strings.Contains(out, "TOPSECRET"), out)
 	}
 	assert.True(t, strings.Contains(fmt.Sprintf("%+v", s), "d.example"))
+}
+
+func TestLoadTokenUnavailable(t *testing.T) {
+	ctx, st, box := context.Background(), &memStore{}, testBox(t)
+	must.Nil(SaveSettings(ctx, st, box, config.Config{}, Settings{URL: "https://d.example", Token: "tok"}))
+
+	_, err := loadToken(ctx, st, must.Value(secret.NewBox(bytes.Repeat([]byte{7}, 32))), config.Config{})
+	assert.ErrorIs(t, ErrTokenUnavailable, err)
+	assert.ErrorContain(t, "re-enter it in Settings", err)
+	_, err = loadToken(ctx, st, nil, config.Config{})
+	assert.ErrorIs(t, ErrTokenUnavailable, err)
+
+	_, err = loadToken(ctx, &memStore{err: errors.New("db down")}, box, config.Config{})
+	assert.False(t, errors.Is(err, ErrTokenUnavailable))
 }

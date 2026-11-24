@@ -24,7 +24,17 @@ var (
 	ErrManagedByEnv = errors.New("DefectDojo settings are managed by environment variables")
 	// ErrNoToken is returned by loadToken when no API token is configured.
 	ErrNoToken = errors.New("no DefectDojo API token configured")
+	// ErrTokenUnavailable marks a configured API token that cannot be used:
+	// it does not open with the current key or is malformed.
+	ErrTokenUnavailable = errors.New("DefectDojo API token unavailable")
 )
+
+// tokenError is a loadToken failure caused by the token itself, not by the
+// store; it keeps the message and matches ErrTokenUnavailable.
+type tokenError struct{ err error }
+
+func (e tokenError) Error() string   { return e.err.Error() }
+func (e tokenError) Unwrap() []error { return []error{e.err, ErrTokenUnavailable} }
 
 // SettingsStore is the persistence the settings service needs; *store.Store
 // satisfies it.
@@ -162,7 +172,7 @@ func loadToken(ctx context.Context, st SettingsStore, box *secret.Box, cfg confi
 	if cfg.DojoURL != "" {
 		tok, err := normaliseToken(cfg.DojoToken)
 		if err != nil {
-			return "", fmt.Errorf("RAMPART_DOJO_TOKEN: %w", err)
+			return "", tokenError{fmt.Errorf("RAMPART_DOJO_TOKEN: %w", err)}
 		}
 		if tok == "" {
 			return "", ErrNoToken
@@ -180,11 +190,11 @@ func loadToken(ctx context.Context, st SettingsStore, box *secret.Box, cfg confi
 		return "", ErrNoToken
 	}
 	if box == nil {
-		return "", errors.New("DefectDojo token cannot be opened: no encryption key")
+		return "", tokenError{errors.New("DefectDojo token cannot be opened: no encryption key")}
 	}
 	plain, err := box.Open(row.TokenEnc, tokenAAD)
 	if err != nil {
-		return "", fmt.Errorf("open DefectDojo token (re-enter it in Settings): %w", err)
+		return "", tokenError{fmt.Errorf("open DefectDojo token (re-enter it in Settings): %w", err)}
 	}
 	return string(plain), nil
 }

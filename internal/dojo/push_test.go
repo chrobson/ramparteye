@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -23,36 +24,60 @@ import (
 	"github.com/chrobson/ramparteye/internal/store"
 )
 
-// memPushStore is an in-memory PushStore serving one run snapshot.
+// memPushStore is an in-memory PushStore holding run snapshots by id.
 type memPushStore struct {
 	mu     sync.Mutex
-	snap   store.DojoRun
+	runs   map[int64]store.DojoRun
 	runErr error
 	panics bool
 	pushes []store.DojoPush // oldest first
 }
 
+func newMemStore(snaps ...store.DojoRun) *memPushStore {
+	m := &memPushStore{runs: map[int64]store.DojoRun{}}
+	for _, s := range snaps {
+		m.runs[s.Run.ID] = s
+	}
+	return m
+}
+
 func (m *memPushStore) DojoRun(_ context.Context, runID int64) (store.DojoRun, error) {
 	if m.panics {
-		panic("boom")
+		panic("boom " + testToken)
 	}
 	if m.runErr != nil {
 		return store.DojoRun{}, m.runErr
 	}
-	if runID != 0 && runID != m.snap.Run.ID {
-		return store.DojoRun{}, store.ErrRunNotFound
-	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	s := m.snap
-	for i := len(m.pushes) - 1; i >= 0; i-- {
-		if m.pushes[i].OK {
-			n := m.pushes[i].Findings
-			s.PrevFindings = &n
-			break
+	if runID == 0 {
+		for id := range m.runs {
+			runID = max(runID, id)
 		}
 	}
+	s, ok := m.runs[runID]
+	if !ok {
+		return store.DojoRun{}, store.ErrRunNotFound
+	}
 	return s, nil
+}
+
+func (m *memPushStore) DojoLastPush(_ context.Context, runID int64) (store.DojoLastPush, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	profile := m.runs[runID].ProfileName
+	var out store.DojoLastPush
+	for _, p := range m.pushes {
+		if !p.OK || p.Skipped || p.RunID == nil || m.runs[*p.RunID].ProfileName != profile {
+			continue
+		}
+		id, n := *p.RunID, p.Findings
+		if out.RunID == nil || id > *out.RunID {
+			out.RunID = &id
+		}
+		out.Findings = &n
+	}
+	return out, nil
 }
 
 func (m *memPushStore) RecordDojoPush(_ context.Context, p store.DojoPush) error {
@@ -64,14 +89,16 @@ func (m *memPushStore) RecordDojoPush(_ context.Context, p store.DojoPush) error
 	return nil
 }
 
-func (m *memPushStore) DojoPushes(_ context.Context, limit int) ([]store.DojoPush, error) {
+func (m *memPushStore) LatestDojoPush(_ context.Context, okOnly bool) (*store.DojoPush, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var out []store.DojoPush
-	for i := len(m.pushes) - 1; i >= 0 && len(out) < limit; i-- {
-		out = append(out, m.pushes[i])
+	for i := len(m.pushes) - 1; i >= 0; i-- {
+		p := m.pushes[i]
+		if !p.Skipped && (p.OK || !okOnly) {
+			return &p, nil
+		}
 	}
-	return out, nil
+	return nil, nil
 }
 
 func (m *memPushStore) Signatures(context.Context) ([]store.SignatureRow, error) { return nil, nil }
@@ -80,6 +107,15 @@ func (m *memPushStore) history() []store.DojoPush {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]store.DojoPush(nil), m.pushes...)
+}
+
+// dropFirstService removes the first service of run id.
+func (m *memPushStore) dropFirstService(id int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.runs[id]
+	r.Services = r.Services[1:]
+	m.runs[id] = r
 }
 
 func pushSnap(profile string) store.DojoRun {
@@ -113,11 +149,13 @@ type dedupDojo struct {
 	inFlight   map[string]int
 	maxFlight  int
 	noStats    bool
+	entered    chan struct{} // receives one value per request that got past auth
+	closeOld   []string      // close_old_findings of each request
 }
 
 func newDedupDojo(t *testing.T) (*dedupDojo, *httptest.Server) {
 	t.Helper()
-	d := &dedupDojo{tests: map[string]map[string]bool{}, inFlight: map[string]int{}}
+	d := &dedupDojo{tests: map[string]map[string]bool{}, inFlight: map[string]int{}, entered: make(chan struct{}, 16)}
 	srv := httptest.NewServer(http.HandlerFunc(d.serve))
 	t.Cleanup(srv.Close)
 	return d, srv
@@ -137,10 +175,15 @@ func (d *dedupDojo) serve(w http.ResponseWriter, r *http.Request) {
 	title := r.FormValue("test_title")
 	d.mu.Lock()
 	d.titles = append(d.titles, title)
+	d.closeOld = append(d.closeOld, r.FormValue("close_old_findings"))
 	d.inFlight[title]++
 	d.maxFlight = max(d.maxFlight, d.inFlight[title])
 	status, block := d.status, d.block
 	d.mu.Unlock()
+	select {
+	case d.entered <- struct{}{}:
+	default:
+	}
 	defer func() {
 		d.mu.Lock()
 		d.inFlight[title]--
@@ -226,12 +269,16 @@ func configured(url string) Settings {
 }
 
 func newTestPusher(st PushStore, s Settings) *Pusher {
-	return NewPusher(st, func(context.Context) (Settings, error) { return s, nil }, DefaultClient)
+	p := NewPusher(st, func(context.Context) (Settings, error) { return s, nil }, DefaultClient)
+	p.Log = quietLog
+	return p
 }
+
+var quietLog = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func TestAutoPushAfterDone(t *testing.T) {
 	fake, srv := newDedupDojo(t)
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
 
 	p.OnRunDone(context.Background(), 7, "done")
@@ -253,7 +300,7 @@ func TestAutoPushOnlyWhenDone(t *testing.T) {
 	for _, status := range []string{"cancelled", "failed", "paused", "running", ""} {
 		t.Run(status, func(t *testing.T) {
 			fake, srv := newDedupDojo(t)
-			st := &memPushStore{snap: pushSnap("dmz")}
+			st := newMemStore(pushSnap("dmz"))
 			p := newTestPusher(st, configured(srv.URL))
 
 			p.OnRunDone(context.Background(), 7, status)
@@ -267,7 +314,7 @@ func TestAutoPushOnlyWhenDone(t *testing.T) {
 
 func TestAutoPushDisabled(t *testing.T) {
 	fake, srv := newDedupDojo(t)
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	s := configured(srv.URL)
 	s.AutoPush = false
 	p := newTestPusher(st, s)
@@ -293,7 +340,7 @@ func TestNoPushWhenNotConfigured(t *testing.T) {
 	}
 	for name, s := range cases {
 		t.Run(name, func(t *testing.T) {
-			st := &memPushStore{snap: pushSnap("dmz")}
+			st := newMemStore(pushSnap("dmz"))
 			p := newTestPusher(st, s)
 
 			p.OnRunDone(context.Background(), 7, "done")
@@ -312,7 +359,7 @@ func TestNoPushWhenNotConfigured(t *testing.T) {
 func TestPushFailureRecordedScanUnaffected(t *testing.T) {
 	fake, srv := newDedupDojo(t)
 	fake.status = http.StatusInternalServerError
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
 
 	assert.NoPanic(t, func() { p.OnRunDone(context.Background(), 7, "done") })
@@ -354,7 +401,7 @@ func TestPushFailureModes(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			st := &memPushStore{snap: pushSnap("dmz")}
+			st := newMemStore(pushSnap("dmz"))
 			p := newTestPusher(st, tc.s)
 
 			rec, err := p.PushRun(context.Background(), 7, "manual")
@@ -371,7 +418,7 @@ func TestPushFailureModes(t *testing.T) {
 }
 
 func TestPushErrorBeforeDojoRecorded(t *testing.T) {
-	st := &memPushStore{snap: pushSnap("dmz"), runErr: errors.New("db down")}
+	st := &memPushStore{runs: newMemStore(pushSnap("dmz")).runs, runErr: errors.New("db down")}
 	p := newTestPusher(st, configured("http://127.0.0.1:1"))
 
 	_, err := p.PushRun(context.Background(), 7, "cli")
@@ -381,15 +428,16 @@ func TestPushErrorBeforeDojoRecorded(t *testing.T) {
 	assert.Len(t, 1, pushes)
 	assert.False(t, pushes[0].OK)
 	assert.Equal(t, "cli", pushes[0].Trigger)
-	assert.Nil(t, pushes[0].RunID)
+	assert.Equal(t, int64(7), *pushes[0].RunID) // known even though loading failed
 	assert.Contain(t, "db down", pushes[0].Error)
 }
 
 func TestPushSettingsErrorRecorded(t *testing.T) {
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := NewPusher(st, func(context.Context) (Settings, error) {
 		return Settings{}, errors.New("open DefectDojo token (re-enter it in Settings): bad key")
 	}, DefaultClient)
+	p.Log = quietLog
 
 	_, err := p.PushRun(context.Background(), 7, "manual")
 
@@ -397,10 +445,11 @@ func TestPushSettingsErrorRecorded(t *testing.T) {
 	pushes := st.history()
 	assert.Len(t, 1, pushes)
 	assert.Contain(t, "re-enter it", pushes[0].Error)
+	assert.Equal(t, int64(7), *pushes[0].RunID)
 }
 
 func TestPushRunRejectsUnknownTrigger(t *testing.T) {
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured("http://127.0.0.1:1"))
 
 	_, err := p.PushRun(context.Background(), 7, "cron")
@@ -411,7 +460,7 @@ func TestPushRunRejectsUnknownTrigger(t *testing.T) {
 
 func TestReimportNoDuplicates(t *testing.T) {
 	fake, srv := newDedupDojo(t)
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
 
 	first := must.Value(p.PushRun(context.Background(), 7, "manual"))
@@ -428,9 +477,7 @@ func TestReimportNoDuplicates(t *testing.T) {
 
 	// A service disappears: close_old_findings closes it, still no
 	// duplicates.
-	st.mu.Lock()
-	st.snap.Services = st.snap.Services[1:]
-	st.mu.Unlock()
+	st.dropFirstService(7)
 	third := must.Value(p.PushRun(context.Background(), 7, "manual"))
 	assert.Equal(t, 2, third.Findings)
 	assert.Equal(t, 0, third.Added)
@@ -440,7 +487,7 @@ func TestReimportNoDuplicates(t *testing.T) {
 
 func TestPushTestTitlePerProfile(t *testing.T) {
 	fake, srv := newDedupDojo(t)
-	st := &memPushStore{snap: pushSnap("")}
+	st := newMemStore(pushSnap(""))
 	p := newTestPusher(st, configured(srv.URL))
 
 	must.Value(p.PushRun(context.Background(), 0, "cli"))
@@ -451,13 +498,11 @@ func TestPushTestTitlePerProfile(t *testing.T) {
 func TestAddedClosedFallbackWithoutStatistics(t *testing.T) {
 	fake, srv := newDedupDojo(t)
 	fake.noStats = true
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
 
 	first := must.Value(p.PushRun(context.Background(), 7, "manual"))
-	st.mu.Lock()
-	st.snap.Services = st.snap.Services[1:]
-	st.mu.Unlock()
+	st.dropFirstService(7)
 	second := must.Value(p.PushRun(context.Background(), 7, "manual"))
 
 	assert.Equal(t, 3, first.Added) // first push of the profile: everything is new
@@ -469,7 +514,7 @@ func TestAddedClosedFallbackWithoutStatistics(t *testing.T) {
 func TestPushesSerializedPerProfile(t *testing.T) {
 	fake, srv := newDedupDojo(t)
 	fake.block = make(chan struct{})
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
 
 	var wg sync.WaitGroup
@@ -480,7 +525,12 @@ func TestPushesSerializedPerProfile(t *testing.T) {
 			_, _ = p.PushRun(context.Background(), 7, "manual")
 		}()
 	}
-	time.Sleep(100 * time.Millisecond)
+	<-fake.entered // one push reached DefectDojo; the others queue on the lock
+	select {
+	case <-fake.entered:
+		t.Fatal("second reimport of the same profile started concurrently")
+	case <-time.After(200 * time.Millisecond):
+	}
 	close(fake.block)
 	wg.Wait()
 
@@ -492,14 +542,22 @@ func TestOnRunDoneDoesNotBlock(t *testing.T) {
 	fake, srv := newDedupDojo(t)
 	fake.block = make(chan struct{})
 	defer close(fake.block)
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
-	p.Timeout = 200 * time.Millisecond
+	p.Timeout = 300 * time.Millisecond
 
-	start := time.Now()
-	p.OnRunDone(context.Background(), 7, "done")
-	assert.Smaller(t, 50*time.Millisecond, time.Since(start))
-	p.Wait()
+	returned := make(chan struct{})
+	go func() {
+		p.OnRunDone(context.Background(), 7, "done")
+		close(returned)
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("OnRunDone blocked")
+	}
+	<-fake.entered // the push is in flight, DefectDojo hangs
+	p.Wait()       // ends through the push timeout
 
 	pushes := st.history()
 	assert.Len(t, 1, pushes)
@@ -509,7 +567,7 @@ func TestOnRunDoneDoesNotBlock(t *testing.T) {
 
 func TestOnRunDoneOutlivesCallerContext(t *testing.T) {
 	_, srv := newDedupDojo(t)
-	st := &memPushStore{snap: pushSnap("dmz")}
+	st := newMemStore(pushSnap("dmz"))
 	p := newTestPusher(st, configured(srv.URL))
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -523,17 +581,24 @@ func TestOnRunDoneOutlivesCallerContext(t *testing.T) {
 }
 
 func TestOnRunDoneRecoversPanic(t *testing.T) {
-	st := &memPushStore{snap: pushSnap("dmz"), panics: true}
+	st := &memPushStore{runs: newMemStore(pushSnap("dmz")).runs, panics: true}
 	p := newTestPusher(st, configured("http://127.0.0.1:1"))
 
 	assert.NoPanic(t, func() {
 		p.OnRunDone(context.Background(), 7, "done")
 		p.Wait()
 	})
+	pushes := st.history()
+	assert.Len(t, 1, pushes)
+	assert.False(t, pushes[0].OK)
+	assert.Equal(t, "auto", pushes[0].Trigger)
+	assert.Equal(t, int64(7), *pushes[0].RunID)
+	assert.Equal(t, "internal error: DefectDojo push panicked", pushes[0].Error)
+	assert.NotContain(t, testToken, pushes[0].Error)
 }
 
 func TestChipLastFailed(t *testing.T) {
-	st := &memPushStore{}
+	st := newMemStore()
 	s := Settings{URL: "https://dojo.example", TokenSet: true}
 	ctx := context.Background()
 
@@ -558,7 +623,7 @@ func TestChipLastFailed(t *testing.T) {
 func TestPushRecordErrorNeverHasToken(t *testing.T) {
 	// The settings error text is produced outside the client; the pusher
 	// still masks the token in whatever it records.
-	st := &memPushStore{snap: pushSnap("dmz"), runErr: errors.New("failed with " + testToken)}
+	st := &memPushStore{runs: newMemStore(pushSnap("dmz")).runs, runErr: errors.New("failed with " + testToken)}
 	p := newTestPusher(st, configured("http://127.0.0.1:1"))
 
 	_, err := p.PushRun(context.Background(), 7, "manual")
@@ -590,4 +655,192 @@ func TestStoredSettingsOpensToken(t *testing.T) {
 func testBoxOther(t *testing.T) *secret.Box {
 	t.Helper()
 	return must.Value(secret.NewBox(bytes.Repeat([]byte{7}, 32)))
+}
+
+// snapAt returns the dmz snapshot as run id with only the given service.
+func snapAt(id int64, profile, ip string) store.DojoRun {
+	s := pushSnap(profile)
+	s.Run.ID = id
+	s.Services = []store.ExportService{{ServiceObs: model.ServiceObs{
+		Key: model.AssetKey{IP: netip.MustParseAddr(ip), Port: 80, Proto: "tcp"}}}}
+	return s
+}
+
+func TestStaleAutoPushSkipped(t *testing.T) {
+	fake, srv := newDedupDojo(t)
+	st := newMemStore(snapAt(1, "dmz", "10.20.0.1"), snapAt(2, "dmz", "10.20.0.2"))
+	p := newTestPusher(st, configured(srv.URL))
+
+	p.OnRunDone(context.Background(), 2, "done")
+	p.Wait()
+	p.OnRunDone(context.Background(), 1, "done") // finished late, older run
+	p.Wait()
+
+	assert.Len(t, 1, fake.seenTitles()) // run 1 never reached DefectDojo
+	open := fake.tests["RampartEye – dmz"]
+	assert.Len(t, 1, open)
+	for h := range open {
+		assert.Contain(t, "10.20.0.2", h) // run 2's findings remain open
+	}
+	pushes := st.history()
+	assert.Len(t, 2, pushes)
+	assert.True(t, pushes[1].Skipped)
+	assert.False(t, pushes[1].OK)
+	assert.Equal(t, "skipped: newer run already pushed", pushes[1].Error)
+	assert.Equal(t, int64(1), *pushes[1].RunID)
+	chip := must.Value(p.Status(context.Background()))
+	assert.True(t, *chip.LastOK) // a skip is not a failure
+
+	// Re-pushing the newest run is fine.
+	rec := must.Value(p.PushRun(context.Background(), 2, "manual"))
+	assert.True(t, rec.OK)
+}
+
+func TestStaleManualPushRefused(t *testing.T) {
+	fake, srv := newDedupDojo(t)
+	st := newMemStore(snapAt(1, "dmz", "10.20.0.1"), snapAt(2, "dmz", "10.20.0.2"))
+	p := newTestPusher(st, configured(srv.URL))
+	must.Value(p.PushRun(context.Background(), 2, "manual"))
+
+	for _, trigger := range []string{"manual", "cli"} {
+		rec, err := p.PushRun(context.Background(), 1, trigger)
+
+		assert.ErrorIs(t, ErrStaleRun, err)
+		assert.False(t, rec.OK)
+		assert.False(t, rec.Skipped)
+	}
+	assert.Len(t, 1, fake.seenTitles())
+	pushes := st.history()
+	assert.Len(t, 3, pushes)
+	assert.False(t, pushes[2].OK)
+	assert.Contain(t, "newer run", pushes[2].Error)
+}
+
+func TestStaleCheckPerProfile(t *testing.T) {
+	_, srv := newDedupDojo(t)
+	st := newMemStore(snapAt(1, "lab", "10.20.0.1"), snapAt(2, "dmz", "10.20.0.2"))
+	p := newTestPusher(st, configured(srv.URL))
+	must.Value(p.PushRun(context.Background(), 2, "manual"))
+
+	rec, err := p.PushRun(context.Background(), 1, "manual") // other profile
+
+	assert.NoError(t, err)
+	assert.True(t, rec.OK)
+}
+
+func TestAdHocNeverClosesOldFindings(t *testing.T) {
+	fake, srv := newDedupDojo(t)
+	st := newMemStore(snapAt(1, "", "10.20.0.1"), snapAt(2, "", "10.20.0.2"))
+	p := newTestPusher(st, configured(srv.URL)) // CloseMissing on
+
+	must.Value(p.PushRun(context.Background(), 1, "cli"))        // target set A
+	rec := must.Value(p.PushRun(context.Background(), 2, "cli")) // target set B
+
+	assert.Equal(t, 0, rec.Closed)
+	assert.Len(t, 2, fake.tests["RampartEye – ad-hoc"]) // A still open
+	assert.Equal(t, []string{"false", "false"}, fake.closeOld)
+
+	// Older ad-hoc runs are not stale: they never close anything.
+	again := must.Value(p.PushRun(context.Background(), 1, "cli"))
+	assert.True(t, again.OK)
+}
+
+func TestProfileRunHonoursCloseMissing(t *testing.T) {
+	fake, srv := newDedupDojo(t)
+	st := newMemStore(pushSnap("dmz"))
+	s := configured(srv.URL)
+	p := newTestPusher(st, s)
+	must.Value(p.PushRun(context.Background(), 7, "manual"))
+	s.CloseMissing = false
+	p2 := newTestPusher(st, s)
+	must.Value(p2.PushRun(context.Background(), 7, "manual"))
+
+	assert.Equal(t, []string{"true", "false"}, fake.closeOld)
+}
+
+func TestCloseCancelsInFlightAndDropsLater(t *testing.T) {
+	fake, srv := newDedupDojo(t)
+	fake.block = make(chan struct{})
+	defer close(fake.block)
+	st := newMemStore(pushSnap("dmz"))
+	p := newTestPusher(st, configured(srv.URL))
+
+	p.OnRunDone(context.Background(), 7, "done")
+	<-fake.entered
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	assert.NoError(t, p.Close(ctx)) // returns once the in-flight push gave up
+
+	pushes := st.history()
+	assert.Len(t, 1, pushes)
+	assert.False(t, pushes[0].OK)
+	assert.Contain(t, "context canceled", pushes[0].Error)
+
+	p.OnRunDone(context.Background(), 7, "done") // dropped
+	p.Wait()
+	_, err := p.PushRun(context.Background(), 7, "manual")
+	assert.ErrorIs(t, ErrClosed, err)
+	assert.Len(t, 1, st.history())
+	assert.Len(t, 1, fake.seenTitles())
+}
+
+func TestCloseRespectsContext(t *testing.T) {
+	st := newMemStore(pushSnap("dmz"))
+	release := make(chan struct{})
+	p := NewPusher(st, func(context.Context) (Settings, error) {
+		<-release // settings load ignores cancellation
+		return Settings{}, nil
+	}, DefaultClient)
+	p.Log = quietLog
+	p.OnRunDone(context.Background(), 7, "done")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := p.Close(ctx)
+
+	assert.ErrorIs(t, context.Canceled, err)
+	close(release)
+	p.Wait()
+}
+
+func TestAutoPushSettingsErrors(t *testing.T) {
+	cases := map[string]struct {
+		err  error
+		rows int
+	}{
+		"store unreachable": {errors.New("load DefectDojo settings: connection refused"), 0},
+		"token unavailable": {tokenError{errors.New("open DefectDojo token (re-enter it in Settings): bad key")}, 1},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			st := newMemStore(pushSnap("dmz"))
+			p := NewPusher(st, func(context.Context) (Settings, error) { return Settings{}, tc.err }, DefaultClient)
+			p.Log = quietLog
+
+			p.OnRunDone(context.Background(), 7, "done")
+			p.Wait()
+
+			pushes := st.history()
+			assert.Len(t, tc.rows, pushes)
+			if tc.rows == 1 {
+				assert.Equal(t, int64(7), *pushes[0].RunID)
+				assert.Contain(t, "re-enter it", pushes[0].Error)
+			}
+		})
+	}
+}
+
+func TestChipIgnoresSkippedAndOldRows(t *testing.T) {
+	st := newMemStore()
+	ctx := context.Background()
+	must.Nil(st.RecordDojoPush(ctx, store.DojoPush{Trigger: "auto", Findings: 36, OK: true}))
+	for range 60 {
+		must.Nil(st.RecordDojoPush(ctx, store.DojoPush{Trigger: "auto", Error: "HTTP 500"}))
+	}
+	must.Nil(st.RecordDojoPush(ctx, store.DojoPush{Trigger: "auto", Skipped: true, Error: SkippedStale}))
+
+	chip := must.Value(Status(ctx, st, Settings{URL: "https://d.example", TokenSet: true}))
+
+	assert.False(t, *chip.LastOK)
+	assert.Equal(t, 36, chip.Findings)
 }

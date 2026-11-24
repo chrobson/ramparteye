@@ -28,16 +28,19 @@ type DojoConfig struct {
 
 // DojoPush is one recorded DefectDojo push attempt.
 type DojoPush struct {
-	ID         int64
-	RunID      *int64
-	At         time.Time
-	Trigger    string // auto | manual | cli
-	Endpoint   string // import-scan | reimport-scan
-	Findings   int
-	Added      int
-	Closed     int
-	TestID     *int64
-	OK         bool
+	ID       int64
+	RunID    *int64
+	At       time.Time
+	Trigger  string // auto | manual | cli
+	Endpoint string // import-scan | reimport-scan
+	Findings int
+	Added    int
+	Closed   int
+	TestID   *int64
+	OK       bool
+	// Skipped marks an automatic push that was not sent because a newer
+	// run of the same profile had already been pushed.
+	Skipped    bool
 	Error      string
 	Statistics json.RawMessage
 }
@@ -71,34 +74,53 @@ func (s *Store) SaveDojoConfig(ctx context.Context, c DojoConfig) error {
 	return nil
 }
 
-// RecordDojoPush stores a push attempt.
+// RecordDojoPush stores a push attempt. A RunID naming no run is stored as
+// NULL, so a failed push of an unknown run is still recorded.
 func (s *Store) RecordDojoPush(ctx context.Context, p DojoPush) error {
 	stats := p.Statistics
 	if len(stats) == 0 {
 		stats = json.RawMessage("{}")
 	}
 	_, err := s.db.Exec(ctx, `INSERT INTO dojo_pushes
-		(run_id, trigger, endpoint, findings, added, closed, test_id, ok, error, statistics)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		p.RunID, p.Trigger, p.Endpoint, p.Findings, p.Added, p.Closed, p.TestID, p.OK, p.Error, []byte(stats))
+		(run_id, trigger, endpoint, findings, added, closed, test_id, ok, skipped, error, statistics)
+		VALUES ((SELECT id FROM scan_runs WHERE id = $1::bigint), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		p.RunID, p.Trigger, p.Endpoint, p.Findings, p.Added, p.Closed, p.TestID, p.OK, p.Skipped, p.Error, []byte(stats))
 	return err
+}
+
+const dojoPushCols = `id, run_id, at, trigger, endpoint, findings, added, closed, test_id, ok, skipped, error,
+	statistics`
+
+func scanDojoPush(r pgx.Row) (DojoPush, error) {
+	var p DojoPush
+	var stats []byte
+	err := r.Scan(&p.ID, &p.RunID, &p.At, &p.Trigger, &p.Endpoint, &p.Findings, &p.Added, &p.Closed,
+		&p.TestID, &p.OK, &p.Skipped, &p.Error, &stats)
+	p.Statistics = stats
+	return p, err
 }
 
 // DojoPushes returns the latest push attempts, newest first.
 func (s *Store) DojoPushes(ctx context.Context, limit int) ([]DojoPush, error) {
-	rows, err := s.db.Query(ctx, `SELECT id, run_id, at, trigger, endpoint, findings, added, closed, test_id,
-		ok, error, statistics FROM dojo_pushes ORDER BY at DESC, id DESC LIMIT $1`, limit)
+	rows, err := s.db.Query(ctx, `SELECT `+dojoPushCols+` FROM dojo_pushes ORDER BY at DESC, id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
-	return collect(rows, func(r pgx.Rows) (DojoPush, error) {
-		var p DojoPush
-		var stats []byte
-		err := r.Scan(&p.ID, &p.RunID, &p.At, &p.Trigger, &p.Endpoint, &p.Findings, &p.Added, &p.Closed,
-			&p.TestID, &p.OK, &p.Error, &stats)
-		p.Statistics = stats
-		return p, err
-	})
+	return collect(rows, func(r pgx.Rows) (DojoPush, error) { return scanDojoPush(r) })
+}
+
+// LatestDojoPush returns the newest push attempt that was not skipped, or
+// with okOnly the newest successful one (nil = none).
+func (s *Store) LatestDojoPush(ctx context.Context, okOnly bool) (*DojoPush, error) {
+	p, err := scanDojoPush(s.db.QueryRow(ctx, `SELECT `+dojoPushCols+` FROM dojo_pushes
+		WHERE NOT skipped AND (ok OR NOT $1) ORDER BY at DESC, id DESC LIMIT 1`, okOnly))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &p, nil
 }
 
 // DojoRun is a finished run with everything a DefectDojo push needs: the
@@ -109,9 +131,6 @@ type DojoRun struct {
 	ProfileName string // "" = no profile (ad-hoc scan or import)
 	Services    []ExportService
 	Annotations []Annotation
-	// PrevFindings is the finding count of the latest successful push of a
-	// run of the same profile (nil = never pushed).
-	PrevFindings *int
 }
 
 // DojoRun loads run runID, or the latest finished run when runID is 0. It
@@ -129,10 +148,9 @@ func (s *Store) DojoRun(ctx context.Context, runID int64) (DojoRun, error) {
 	if err != nil {
 		return DojoRun{}, err
 	}
-	var configID *int64
-	if err := s.db.QueryRow(ctx, `SELECT r.config_id, coalesce(c.name, '')
+	if err := s.db.QueryRow(ctx, `SELECT coalesce(c.name, '')
 		FROM scan_runs r LEFT JOIN scan_configs c ON c.id = r.config_id WHERE r.id = $1`, out.Run.ID).
-		Scan(&configID, &out.ProfileName); err != nil {
+		Scan(&out.ProfileName); err != nil {
 		return DojoRun{}, err
 	}
 	if out.Services, err = s.ExportServices(ctx, out.Run.ID); err != nil {
@@ -146,14 +164,27 @@ func (s *Store) DojoRun(ctx context.Context, runID int64) (DojoRun, error) {
 	if out.Annotations, err = collect(rows, func(r pgx.Rows) (Annotation, error) { return scanAnnotation(r) }); err != nil {
 		return DojoRun{}, err
 	}
-	var prev int
-	err = s.db.QueryRow(ctx, `SELECT p.findings FROM dojo_pushes p JOIN scan_runs r ON r.id = p.run_id
-		WHERE p.ok AND r.config_id IS NOT DISTINCT FROM $1 ORDER BY p.at DESC, p.id DESC LIMIT 1`, configID).Scan(&prev)
-	switch {
-	case err == nil:
-		out.PrevFindings = &prev
-	case !errors.Is(err, pgx.ErrNoRows):
-		return DojoRun{}, err
-	}
 	return out, nil
+}
+
+// DojoLastPush is the push history of the scan profile of a run.
+type DojoLastPush struct {
+	// RunID is the newest run successfully pushed (nil = never pushed).
+	RunID *int64
+	// Findings is the finding count of the latest successful push.
+	Findings *int
+}
+
+// DojoLastPush returns the successful push history of the profile of run
+// runID; runs without a profile (ad-hoc scans, imports) share one history.
+func (s *Store) DojoLastPush(ctx context.Context, runID int64) (DojoLastPush, error) {
+	var out DojoLastPush
+	err := s.db.QueryRow(ctx, `WITH pushed AS (
+			SELECT p.id, p.at, p.run_id, p.findings FROM dojo_pushes p JOIN scan_runs r ON r.id = p.run_id
+			WHERE p.ok AND NOT p.skipped
+			  AND r.config_id IS NOT DISTINCT FROM (SELECT config_id FROM scan_runs WHERE id = $1))
+		SELECT (SELECT max(run_id) FROM pushed),
+		       (SELECT findings FROM pushed ORDER BY at DESC, id DESC LIMIT 1)`, runID).
+		Scan(&out.RunID, &out.Findings)
+	return out, err
 }

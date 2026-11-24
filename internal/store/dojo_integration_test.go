@@ -126,12 +126,6 @@ func TestDojoRunSnapshot(t *testing.T) {
 		Proto: "tcp"}, Comment: "prod", Tags: []string{"web"}}))
 	must.Value(s.UpsertAnnotation(ctx, store.Annotation{Key: model.AssetKey{IP: addr("10.99.0.1")}, Comment: "other"}))
 
-	// Previous successful push of the same profile (a failed one and one of
-	// another profile are ignored).
-	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &old, Trigger: "auto", Findings: 3, OK: true}))
-	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &old, Trigger: "auto", Findings: 9, OK: false}))
-	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &adhoc, Trigger: "cli", Findings: 7, OK: true}))
-
 	snap := must.Value(s.DojoRun(ctx, run))
 	assert.Equal(t, run, snap.Run.ID)
 	assert.Equal(t, "dmz", snap.ProfileName)
@@ -140,21 +134,63 @@ func TestDojoRunSnapshot(t *testing.T) {
 	assert.Len(t, 1, snap.Services[1].Detections)
 	assert.Len(t, 1, snap.Annotations) // only annotations of hosts in the run
 	assert.Equal(t, "prod", snap.Annotations[0].Comment)
-	assert.Equal(t, 3, *snap.PrevFindings)
 
 	latest := must.Value(s.DojoRun(ctx, 0)) // 0 = latest finished run (scans win)
 	assert.Equal(t, run, latest.Run.ID)
-
-	imp := must.Value(s.DojoRun(ctx, adhoc))
-	assert.Equal(t, "", imp.ProfileName)
-	assert.Equal(t, 7, *imp.PrevFindings)
+	assert.Equal(t, "", must.Value(s.DojoRun(ctx, adhoc)).ProfileName)
 
 	_, err = s.DojoRun(ctx, failed)
 	assert.ErrorIs(t, store.ErrRunNotFound, err)
+}
 
-	cfg2 := must.Value(s.CreateScanConfig(ctx, store.ScanConfig{Name: "lab", TopPorts: 100, MaxRate: 100, Workers: 1,
+func TestDojoLastPush(t *testing.T) {
+	s, pool := newStore(t)
+	cfg := must.Value(s.CreateScanConfig(ctx, store.ScanConfig{Name: "dmz", TopPorts: 100, MaxRate: 100, Workers: 1,
 		PortProfile: "top"}))
-	other := insertRun(t, pool, "scan", "done")
-	must.Value(pool.Exec(ctx, `UPDATE scan_runs SET config_id = $1 WHERE id = $2`, cfg2, other))
-	assert.Nil(t, must.Value(s.DojoRun(ctx, other)).PrevFindings) // profile never pushed
+	profileRun := func() int64 {
+		id := insertRun(t, pool, "scan", "done")
+		must.Value(pool.Exec(ctx, `UPDATE scan_runs SET config_id = $1 WHERE id = $2`, cfg, id))
+		return id
+	}
+	r1, r2, r3 := profileRun(), profileRun(), profileRun()
+	adhoc := insertRun(t, pool, "import", "done")
+
+	assert.Equal(t, store.DojoLastPush{}, must.Value(s.DojoLastPush(ctx, r1))) // never pushed
+
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &r2, Trigger: "auto", Findings: 5, OK: true}))
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &r1, Trigger: "auto", Findings: 3, OK: true})) // legacy out-of-order
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &r3, Trigger: "auto", Findings: 9, OK: false}))
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &r3, Trigger: "auto", Findings: 8, Skipped: true}))
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &adhoc, Trigger: "cli", Findings: 7, OK: true}))
+
+	last := must.Value(s.DojoLastPush(ctx, r3))
+	assert.Equal(t, r2, *last.RunID)   // newest run successfully pushed
+	assert.Equal(t, 3, *last.Findings) // latest successful push
+	imp := must.Value(s.DojoLastPush(ctx, adhoc))
+	assert.Equal(t, adhoc, *imp.RunID)
+	assert.Equal(t, 7, *imp.Findings)
+}
+
+func TestDojoPushUnknownRunAndLatest(t *testing.T) {
+	s, pool := newStore(t)
+	run := insertRun(t, pool, "scan", "done")
+	gone := int64(999999)
+	assert.Nil(t, must.Value(s.LatestDojoPush(ctx, false)))
+
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &gone, Trigger: "manual", Error: "run not found"}))
+	assert.Nil(t, must.Value(s.DojoPushes(ctx, 1))[0].RunID) // unknown run stored as NULL
+
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &run, Trigger: "auto", Findings: 36, OK: true}))
+	for range 60 {
+		assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &run, Trigger: "auto", Error: "HTTP 500"}))
+	}
+	assert.NoError(t, s.RecordDojoPush(ctx, store.DojoPush{RunID: &run, Trigger: "auto", Skipped: true,
+		Error: "skipped: newer run already pushed"}))
+
+	last := must.Value(s.LatestDojoPush(ctx, false)) // skipped rows ignored
+	assert.False(t, last.OK)
+	assert.Equal(t, "HTTP 500", last.Error)
+	ok := must.Value(s.LatestDojoPush(ctx, true)) // beyond the newest 50 rows
+	assert.Equal(t, 36, ok.Findings)
+	assert.True(t, must.Value(s.DojoPushes(ctx, 1))[0].Skipped)
 }
