@@ -110,17 +110,6 @@ func TestRunLifecycle(t *testing.T) {
 	assert.ErrorIs(t, store.ErrRunNotFound, err)
 }
 
-func TestStopResumeRun(t *testing.T) {
-	s, _ := newStore(t)
-	runID := must.Value(s.CreateRun(ctx, nil, nil))
-
-	assert.True(t, must.Value(s.StopRun(ctx, runID)))
-	assert.Len(t, 0, must.Value(s.OpenRuns(ctx)))
-	assert.True(t, must.Value(s.ResumeRun(ctx, runID)))
-	assert.Len(t, 1, must.Value(s.OpenRuns(ctx)))
-	assert.False(t, must.Value(s.ResumeRun(ctx, runID)))
-}
-
 func TestCancelRuns(t *testing.T) {
 	s, _ := newStore(t)
 	a := must.Value(s.CreateRun(ctx, nil, nil))
@@ -171,16 +160,13 @@ func TestFinishRunKeepsFinalStatus(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// CancelOpenRuns requests a cancel for every unfinished scan run (stopped
-// ones too) and marks the ones not running cancelled at once; a running run
+// CancelOpenRuns requests a cancel for every unfinished scan run and marks the ones not running cancelled at once; a running run
 // is left to the process executing it.
 func TestCancelOpenRuns(t *testing.T) {
 	s, pool := newStore(t)
 	queued := must.Value(s.CreateRun(ctx, nil, nil))
 	running := must.Value(s.CreateRun(ctx, nil, nil))
 	assert.True(t, must.Value(s.StartRun(ctx, running)))
-	stopped := must.Value(s.CreateRun(ctx, nil, nil))
-	assert.True(t, must.Value(s.StopRun(ctx, stopped)))
 	done := must.Value(s.CreateRun(ctx, nil, nil))
 	assert.True(t, must.Value(s.FinishRun(ctx, done, store.RunDone, 0)))
 	imported := insertRun(t, pool, "import", store.RunRunning)
@@ -189,9 +175,9 @@ func TestCancelOpenRuns(t *testing.T) {
 	requested, finished, err := s.CancelOpenRuns(ctx, &uid)
 
 	assert.NoError(t, err)
-	assert.Equal(t, []int64{queued, running, stopped}, requested)
-	assert.Equal(t, []int64{queued, stopped}, finished)
-	for _, id := range []int64{queued, stopped} {
+	assert.Equal(t, []int64{queued, running}, requested)
+	assert.Equal(t, []int64{queued}, finished)
+	for _, id := range []int64{queued} {
 		run := must.Value(s.Run(ctx, id))
 		assert.Equal(t, store.RunCancelled, run.Status)
 		assert.NotNil(t, run.FinishedAt)

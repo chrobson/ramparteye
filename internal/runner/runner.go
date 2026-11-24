@@ -231,17 +231,6 @@ func (r *Runner) Start(ctx context.Context, configID int64) (int64, error) {
 	return runID, nil
 }
 
-// Stop cancels a run executing in this process; it becomes paused.
-func (r *Runner) Stop(runID int64) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	a, ok := r.active[runID]
-	if ok {
-		a.ctl.stop()
-	}
-	return ok
-}
-
 // CancelAll requests the cancel of every unfinished scan run, here and in
 // other processes, on behalf of user by (0 = system). Runs executing in
 // this process are cancelled at once: their nmap processes are killed,

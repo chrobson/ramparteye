@@ -46,7 +46,6 @@ type RunSummary struct {
 	ChunksFailed int
 	HostsUp      int
 	Services     int
-	Stopped      bool
 	Applied      bool // the diff of the run has been applied
 }
 
@@ -67,14 +66,14 @@ const runSummaryCols = `r.id, r.config_id, coalesce(c.name, ''), r.kind, r.statu
 	(SELECT count(*) FROM scan_chunks k WHERE k.run_id = r.id AND k.status = 'done'),
 	(SELECT count(*) FROM scan_chunks k WHERE k.run_id = r.id AND k.status = 'failed'),
 	(SELECT count(*) FROM host_obs h WHERE h.run_id = r.id AND h.up),
-	(SELECT count(*) FROM services s WHERE s.run_id = r.id), r.stopped,
+	(SELECT count(*) FROM services s WHERE s.run_id = r.id),
 	EXISTS (SELECT 1 FROM diff_runs d WHERE d.run_id = r.id)
 	FROM scan_runs r LEFT JOIN scan_configs c ON c.id = r.config_id`
 
 func scanRunSummary(row pgx.Row) (RunSummary, error) {
 	var r RunSummary
 	err := row.Scan(&r.ID, &r.ConfigID, &r.ConfigName, &r.Kind, &r.Status, &r.StartedAt, &r.FinishedAt,
-		&r.DurationMS, &r.ChunksTotal, &r.ChunksDone, &r.ChunksFailed, &r.HostsUp, &r.Services, &r.Stopped,
+		&r.DurationMS, &r.ChunksTotal, &r.ChunksDone, &r.ChunksFailed, &r.HostsUp, &r.Services,
 		&r.Applied)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return r, ErrRunNotFound
@@ -147,13 +146,13 @@ func (s *Store) LastRun(ctx context.Context, configID int64) (*RunInfo, error) {
 	return &r, nil
 }
 
-// OpenRuns lists scan runs that are not finished and not stopped by a user.
+// OpenRuns lists scan runs that are not finished.
 // A queued or paused run with a cancel request is left out, so a cancelled
 // run is never resumed; a running one is kept, so the scheduler still sees
 // that its profile is busy in the process that will cancel it.
 func (s *Store) OpenRuns(ctx context.Context) ([]RunInfo, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+runInfoCols+` FROM scan_runs r
-		WHERE kind = 'scan' AND status IN ('queued', 'running', 'paused') AND NOT stopped
+		WHERE kind = 'scan' AND status IN ('queued', 'running', 'paused')
 		AND (status = 'running' OR NOT EXISTS (SELECT 1 FROM run_cancel_requests c WHERE c.run_id = r.id))
 		ORDER BY id`)
 	if err != nil {
@@ -215,22 +214,6 @@ func (s *Store) ResetRunning(ctx context.Context) (int64, error) {
 		return err
 	})
 	return n, err
-}
-
-// StopRun marks an unfinished scan run stopped by a user, so the scheduler
-// does not resume it; it reports whether the run was open.
-func (s *Store) StopRun(ctx context.Context, runID int64) (bool, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE scan_runs SET stopped = true
-		WHERE id = $1 AND kind = 'scan' AND status IN ('queued', 'running', 'paused')`, runID)
-	return tag.RowsAffected() == 1, err
-}
-
-// ResumeRun lets the scheduler continue a stopped run; it reports whether
-// the run was stopped and resumable.
-func (s *Store) ResumeRun(ctx context.Context, runID int64) (bool, error) {
-	tag, err := s.db.Exec(ctx, `UPDATE scan_runs SET stopped = false
-		WHERE id = $1 AND stopped AND status IN ('queued', 'paused')`, runID)
-	return tag.RowsAffected() == 1, err
 }
 
 // RequestCancel records a cancel request for each run so every process

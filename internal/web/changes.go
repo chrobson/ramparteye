@@ -254,7 +254,7 @@ func (s *Server) changesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, cr := range runs {
 		row := ChangeRunRow{RunID: cr.RunID, PrevRunID: cr.PrevRunID, Kind: cr.Kind,
-			Status: runStatus(cr.Status, false), Applied: cr.Applied, Total: cr.Total}
+			Status: runStatus(cr.Status), Applied: cr.Applied, Total: cr.Total}
 		if cr.FinishedAt != nil {
 			row.FinishedAt = *cr.FinishedAt
 		}
@@ -328,7 +328,7 @@ func (s *Server) changeRunPage(w http.ResponseWriter, r *http.Request) {
 	diff.SortChanges(cs)
 	p := ChangeRunPage{Title: "Changes in run #" + strconv.FormatInt(id, 10), Total: len(cs),
 		Run: ChangeRunRow{RunID: cr.RunID, PrevRunID: cr.PrevRunID, Kind: cr.Kind,
-			Status: runStatus(cr.Status, false), Applied: cr.Applied}}
+			Status: runStatus(cr.Status), Applied: cr.Applied}}
 	by := map[model.ChangeKind][]ChangeLine{}
 	for _, c := range cs {
 		by[c.Kind] = append(by[c.Kind], ChangeLine{Href: assetPath(c.Key), Endpoint: endpoint(c.Key),

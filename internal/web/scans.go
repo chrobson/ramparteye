@@ -47,8 +47,8 @@ type RunStatus struct {
 	Note  string // longer explanation on the run page
 }
 
-// runStatus describes a run's status; stopped marks a run a user paused.
-func runStatus(status string, stopped bool) RunStatus {
+// runStatus describes a run's status.
+func runStatus(status string) RunStatus {
 	st := RunStatus{Key: status, Label: status, Class: "tag-changed"}
 	switch status {
 	case store.RunQueued:
@@ -66,10 +66,6 @@ func runStatus(status string, stopped bool) RunStatus {
 	case store.RunCancelled:
 		st.Label, st.Class = "Cancelled", "tag-gone"
 		st.Note = "This run was cancelled. Its partial results are kept, but changes were not compared and nothing was pushed to DefectDojo."
-	}
-	if stopped && (status == store.RunPaused || status == store.RunQueued) {
-		st.Label, st.Class = "Paused (stopped by a user)", "tag-flap"
-		st.Note = "A user stopped this run. It stays paused until it is resumed."
 	}
 	return st
 }
@@ -91,7 +87,7 @@ func durationText(ms *int64) string {
 }
 
 func (s *Server) runRow(r store.RunSummary, active map[int64]bool) RunRow {
-	row := RunRow{ID: r.ID, Profile: r.ConfigName, Kind: r.Kind, Status: runStatus(r.Status, r.Stopped),
+	row := RunRow{ID: r.ID, Profile: r.ConfigName, Kind: r.Kind, Status: runStatus(r.Status),
 		ChunksFail: r.ChunksFailed, HostsUp: r.HostsUp, Services: r.Services, Duration: durationText(r.DurationMS),
 		Applied: r.Applied, Active: active[r.ID], FinishedRun: r.Status == store.RunDone}
 	if r.StartedAt != nil {

@@ -99,9 +99,6 @@ CREATE TABLE scan_runs (
     kind        text NOT NULL DEFAULT 'scan' CHECK (kind IN ('scan', 'import')),
     status      text NOT NULL DEFAULT 'queued'
                 CHECK (status IN ('queued', 'running', 'paused', 'done', 'failed', 'cancelled')),
-    -- A run stopped by a user stays stopped: the scheduler does not resume
-    -- it until a user resumes it.
-    stopped     boolean NOT NULL DEFAULT false,
     started_at  timestamptz,
     finished_at timestamptz,
     duration_ms bigint

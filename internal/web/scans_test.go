@@ -31,7 +31,7 @@ func scansEnv(t *testing.T) *testEnv {
 			HostsUp: 31, Services: 77, Applied: true},
 		{ID: 5, ConfigName: "Lab weekly", Kind: "scan", Status: store.RunCancelled, StartedAt: &start,
 			FinishedAt: &fin, ChunksTotal: 4, ChunksDone: 1},
-		{ID: 4, ConfigName: "Night", Kind: "scan", Status: store.RunPaused, Stopped: true, ChunksTotal: 2},
+		{ID: 4, ConfigName: "Night", Kind: "scan", Status: store.RunPaused, ChunksTotal: 2},
 	}
 	e.st.dash.latest = 6
 	return e
@@ -57,7 +57,7 @@ func TestScansListShowsRuns(t *testing.T) {
 	assert.Contain(t, "Lab weekly", body)
 	assert.Contain(t, "Done", body)
 	assert.Contain(t, "Cancelled", body)
-	assert.Contain(t, "Paused (stopped by a user)", body)
+	assert.Contain(t, "Paused (waiting for its time window)", body)
 	assert.Contain(t, "8 min", body)
 }
 
@@ -130,12 +130,12 @@ func TestRunPageWithoutReceipt(t *testing.T) {
 	assert.NotContain(t, "Push to DefectDojo now", body)
 }
 
-func TestRunPagePausedByUser(t *testing.T) {
+func TestRunPagePausedByWindow(t *testing.T) {
 	e := scansEnv(t)
 
 	body := e.get("/scans/4", e.login(t, auth.RoleViewer)).Body.String()
 
-	assert.Contain(t, "Paused (stopped by a user)", body)
+	assert.Contain(t, "Paused (waiting for its time window)", body)
 }
 
 func TestRunPageNotFound(t *testing.T) {

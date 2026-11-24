@@ -297,7 +297,7 @@ func (s *Server) profilesList(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if last != nil {
-			row.LastRun = &LastRun{ID: last.ID, Status: runStatus(last.Status, false)}
+			row.LastRun = &LastRun{ID: last.ID, Status: runStatus(last.Status)}
 		}
 		d.Profiles = append(d.Profiles, row)
 	}
