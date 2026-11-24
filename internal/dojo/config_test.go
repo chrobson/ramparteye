@@ -3,6 +3,9 @@ package dojo
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/ctx42/testing/pkg/assert"
@@ -29,7 +32,9 @@ func (m *memStore) DojoConfig(context.Context) (store.DojoConfig, error) {
 
 func (m *memStore) SaveDojoConfig(_ context.Context, c store.DojoConfig) error {
 	m.saves++
-	if c.TokenEnc == nil {
+	if c.ClearToken {
+		c.TokenEnc = nil
+	} else if c.TokenEnc == nil {
 		c.TokenEnc = m.row.TokenEnc
 	}
 	m.row = c
@@ -189,7 +194,7 @@ func TestSaveNormalisesAndDefaults(t *testing.T) {
 	err := SaveSettings(ctx, st, box, config.Config{}, Settings{URL: "  HTTPS://Dojo.Example/base//  ", Product: " Edge "})
 
 	assert.NoError(t, err)
-	assert.Equal(t, "HTTPS://Dojo.Example/base", st.row.URL)
+	assert.Equal(t, "https://dojo.example/base", st.row.URL)
 	assert.Equal(t, "Edge", st.row.Product)
 	assert.Equal(t, "RampartEye", st.row.ProductType)
 	assert.Equal(t, "Continuous discovery", st.row.Engagement)
@@ -211,4 +216,92 @@ func TestRejectBadToken(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Equal(t, 0, st.saves)
+}
+
+func TestURLErrorsDoNotLeakSecrets(t *testing.T) {
+	ctx, box := context.Background(), testBox(t)
+	for _, u := range []string{
+		"https://user:pw@dojo.example/", "https://dojo.example/?api_key=SECRETKEY",
+		"ftp://user:pw@dojo.example/?api_key=SECRETKEY", "https://dojo.example/#SECRETKEY", "://pw:%zz",
+	} {
+		err := SaveSettings(ctx, &memStore{}, box, config.Config{}, Settings{URL: u})
+		assert.Error(t, err, u)
+		for _, leak := range []string{"pw", "api_key", "SECRETKEY"} {
+			assert.False(t, strings.Contains(err.Error(), leak), u+" leaks "+leak)
+		}
+	}
+	cfg := config.Config{DojoURL: "https://user:pw@dojo.example/?api_key=SECRETKEY"}
+	_, err := LoadSettings(ctx, &memStore{}, box, cfg)
+	assert.Error(t, err)
+	assert.False(t, strings.Contains(err.Error(), "SECRETKEY") || strings.Contains(err.Error(), "pw"))
+}
+
+func TestURLNormalisation(t *testing.T) {
+	ok := map[string]string{
+		"HTTPS://Dojo.Example/base//": "https://dojo.example/base",
+		"http://DOJO.example:8080/":   "http://dojo.example:8080",
+		"http://[::1]:8080/dojo/":     "http://[::1]:8080/dojo",
+		"http://[2001:DB8::1]":        "http://[2001:db8::1]",
+	}
+	for in, want := range ok {
+		have, err := normaliseURL(in)
+		assert.NoError(t, err, in)
+		assert.Equal(t, want, have, in)
+	}
+	for _, in := range []string{
+		"http:/host", "http://user@host", "http://@host", "http://host:", "http://host:0",
+		"http://host:65536", "http://host:99999", "http://host:abc", "http://:8080",
+	} {
+		_, err := normaliseURL(in)
+		assert.Error(t, err, in)
+	}
+}
+
+func TestTokenValidation(t *testing.T) {
+	ctx, box := context.Background(), testBox(t)
+	for _, tok := range []string{"a\tb", "a\x7fb", "a\u0085b", "a\x00b", strings.Repeat("x", 513)} {
+		st := &memStore{}
+		err := SaveSettings(ctx, st, box, config.Config{}, Settings{URL: "https://d.example", Token: tok})
+		assert.Error(t, err)
+		assert.Equal(t, 0, st.saves)
+	}
+	st := &memStore{}
+	assert.NoError(t, SaveSettings(ctx, st, box, config.Config{}, Settings{Token: strings.Repeat("x", 512)}))
+
+	cfg := envCfg()
+	cfg.DojoToken = " env-token\n"
+	tok, err := loadToken(ctx, &memStore{}, box, cfg)
+	assert.NoError(t, err)
+	assert.Equal(t, "env-token", tok)
+	cfg.DojoToken = "bad\x01token"
+	_, err = loadToken(ctx, &memStore{}, box, cfg)
+	assert.Error(t, err)
+	assert.False(t, strings.Contains(err.Error(), "bad"))
+	_, err = LoadSettings(ctx, &memStore{}, box, cfg)
+	assert.Error(t, err)
+}
+
+func TestClearToken(t *testing.T) {
+	ctx, st, box := context.Background(), &memStore{}, testBox(t)
+	assert.NoError(t, SaveSettings(ctx, st, box, config.Config{}, Settings{URL: "https://d.example", Token: "tok"}))
+
+	err := SaveSettings(ctx, st, box, config.Config{}, Settings{URL: "https://d.example", Token: "new", ClearToken: true})
+	assert.Error(t, err)
+
+	assert.NoError(t, SaveSettings(ctx, st, box, config.Config{}, Settings{URL: "https://d.example", ClearToken: true}))
+	_, err = loadToken(ctx, st, box, config.Config{})
+	assert.ErrorIs(t, ErrNoToken, err)
+	have := must.Value(LoadSettings(ctx, st, box, config.Config{}))
+	assert.False(t, have.TokenSet)
+}
+
+func TestSettingsRedactToken(t *testing.T) {
+	s := Settings{URL: "https://d.example", Token: "TOPSECRET"}
+	for _, out := range []string{
+		fmt.Sprintf("%v", s), fmt.Sprintf("%+v", s), fmt.Sprintf("%#v", s), fmt.Sprint(&s),
+		string(must.Value(json.Marshal(s))),
+	} {
+		assert.False(t, strings.Contains(out, "TOPSECRET"), out)
+	}
+	assert.True(t, strings.Contains(fmt.Sprintf("%+v", s), "d.example"))
 }

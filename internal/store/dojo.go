@@ -21,7 +21,9 @@ type DojoConfig struct {
 	AutoPush     bool
 	CloseMissing bool
 	ManagedByEnv bool
-	UpdatedAt    time.Time
+	// ClearToken removes the stored token on save (TokenEnc must be nil).
+	ClearToken bool
+	UpdatedAt  time.Time
 }
 
 // DojoPush is one recorded DefectDojo push attempt.
@@ -54,12 +56,12 @@ func (s *Store) DojoConfig(ctx context.Context) (DojoConfig, error) {
 }
 
 // SaveDojoConfig replaces the DefectDojo configuration. A nil TokenEnc keeps
-// the stored token. Errors never carry the token.
+// the stored token unless ClearToken is set. Errors never carry the token.
 func (s *Store) SaveDojoConfig(ctx context.Context, c DojoConfig) error {
-	tag, err := s.db.Exec(ctx, `UPDATE dojo_config SET url = $1, token_enc = coalesce($2, token_enc),
+	tag, err := s.db.Exec(ctx, `UPDATE dojo_config SET url = $1, token_enc = CASE WHEN $9 THEN NULL ELSE coalesce($2, token_enc) END,
 		product_type = $3, product = $4, engagement = $5, auto_push = $6, close_missing = $7,
 		managed_by_env = $8, updated_at = now()`,
-		c.URL, c.TokenEnc, c.ProductType, c.Product, c.Engagement, c.AutoPush, c.CloseMissing, c.ManagedByEnv)
+		c.URL, c.TokenEnc, c.ProductType, c.Product, c.Engagement, c.AutoPush, c.CloseMissing, c.ManagedByEnv, c.ClearToken)
 	if err != nil {
 		return fmt.Errorf("save DefectDojo config: %w", sanitize(err))
 	}

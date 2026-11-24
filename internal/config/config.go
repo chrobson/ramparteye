@@ -31,7 +31,7 @@ type Config struct {
 	DatabaseURL    string         // RAMPART_DATABASE_URL
 	HTTPAddr       string         // RAMPART_HTTP_ADDR, default :9080
 	AllowedCIDRs   []netip.Prefix // RAMPART_ALLOWED_CIDRS, comma separated; empty = nothing may be scanned
-	SecretKey      []byte         // RAMPART_SECRET_KEY, optional, 64 hex chars (32 bytes)
+	SecretKey      []byte         `json:"-"` // RAMPART_SECRET_KEY, optional, 64 hex chars (32 bytes)
 	SecretsDir     string         // RAMPART_SECRETS_DIR, default /var/lib/ramparteye/secrets
 	NmapPath       string         // RAMPART_NMAP_PATH, default "nmap"
 	ScanPrivileged bool           // RAMPART_SCAN_PRIVILEGED: use -sS instead of -sT
@@ -53,9 +53,9 @@ type Config struct {
 	HTTPRetries      int           // RAMPART_HTTP_RETRIES, 0-3, default 1
 
 	DojoURL         string // RAMPART_DOJO_URL (empty = DefectDojo disabled)
-	DojoToken       string // RAMPART_DOJO_TOKEN
+	DojoToken       string `json:"-"` // RAMPART_DOJO_TOKEN
 	DojoUser        string // RAMPART_DOJO_USER
-	DojoPassword    string // RAMPART_DOJO_PASSWORD
+	DojoPassword    string `json:"-"` // RAMPART_DOJO_PASSWORD
 	DojoProductType string // RAMPART_DOJO_PRODUCT_TYPE, default "RampartEye"
 	DojoProduct     string // RAMPART_DOJO_PRODUCT
 	DojoEngagement  string // RAMPART_DOJO_ENGAGEMENT, default "Continuous discovery"
@@ -63,6 +63,31 @@ type Config struct {
 	DojoAutoPush     bool // RAMPART_DOJO_AUTO_PUSH, default true
 	DojoCloseMissing bool // RAMPART_DOJO_CLOSE_MISSING, default false
 }
+
+// redacted returns c without methods and with secrets masked.
+func (c Config) redacted() any {
+	type plain Config
+	p := plain(c)
+	mask := func(set bool) string {
+		if set {
+			return "[redacted]"
+		}
+		return ""
+	}
+	p.DojoToken = mask(c.DojoToken != "")
+	p.DojoPassword = mask(c.DojoPassword != "")
+	p.SecretKey = nil
+	if len(c.SecretKey) > 0 {
+		p.SecretKey = []byte("[redacted]")
+	}
+	return p
+}
+
+// String formats c with secrets (API token, password, secret key) masked.
+func (c Config) String() string { return fmt.Sprintf("%+v", c.redacted()) }
+
+// GoString is String for %#v.
+func (c Config) GoString() string { return fmt.Sprintf("%#v", c.redacted()) }
 
 // UnstableConfig defines host instability across runs.
 type UnstableConfig struct {

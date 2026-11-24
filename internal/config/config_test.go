@@ -2,13 +2,16 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ctx42/testing/pkg/assert"
+	"github.com/ctx42/testing/pkg/must"
 )
 
 func envMap(m map[string]string) func(string) string {
@@ -247,4 +250,17 @@ func TestLoadDojoFlags(t *testing.T) {
 
 	_, err = Load(envMap(map[string]string{"RAMPART_DOJO_AUTO_PUSH": "maybe"}))
 	assert.ErrorContain(t, "RAMPART_DOJO_AUTO_PUSH", err)
+}
+
+func TestConfigRedactsSecrets(t *testing.T) {
+	c := Config{DojoToken: "TOPSECRET", DojoPassword: "PWSECRET", SecretKey: []byte("KEYSECRET"), HTTPAddr: ":1"}
+	for _, out := range []string{
+		fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c), fmt.Sprint(&c),
+		string(must.Value(json.Marshal(c))),
+	} {
+		for _, leak := range []string{"TOPSECRET", "PWSECRET", "KEYSECRET"} {
+			assert.False(t, strings.Contains(out, leak), out)
+		}
+	}
+	assert.True(t, strings.Contains(fmt.Sprintf("%+v", c), ":1"))
 }
