@@ -100,3 +100,60 @@ func (s *Store) DojoPushes(ctx context.Context, limit int) ([]DojoPush, error) {
 		return p, err
 	})
 }
+
+// DojoRun is a finished run with everything a DefectDojo push needs: the
+// full service inventory of the run, the annotations of its hosts and the
+// scan profile that names the DefectDojo test.
+type DojoRun struct {
+	Run         ExportRun
+	ProfileName string // "" = no profile (ad-hoc scan or import)
+	Services    []ExportService
+	Annotations []Annotation
+	// PrevFindings is the finding count of the latest successful push of a
+	// run of the same profile (nil = never pushed).
+	PrevFindings *int
+}
+
+// DojoRun loads run runID, or the latest finished run when runID is 0. It
+// returns ErrRunNotFound unless the run is done.
+func (s *Store) DojoRun(ctx context.Context, runID int64) (DojoRun, error) {
+	var (
+		out DojoRun
+		err error
+	)
+	if runID == 0 {
+		out.Run, err = s.LatestExportRun(ctx)
+	} else {
+		out.Run, err = s.ExportRunByID(ctx, runID)
+	}
+	if err != nil {
+		return DojoRun{}, err
+	}
+	var configID *int64
+	if err := s.db.QueryRow(ctx, `SELECT r.config_id, coalesce(c.name, '')
+		FROM scan_runs r LEFT JOIN scan_configs c ON c.id = r.config_id WHERE r.id = $1`, out.Run.ID).
+		Scan(&configID, &out.ProfileName); err != nil {
+		return DojoRun{}, err
+	}
+	if out.Services, err = s.ExportServices(ctx, out.Run.ID); err != nil {
+		return DojoRun{}, err
+	}
+	rows, err := s.db.Query(ctx, `SELECT `+annotationCols+` FROM annotations
+		WHERE ip IN (SELECT ip FROM services WHERE run_id = $1) ORDER BY ip, port, proto, vhost`, out.Run.ID)
+	if err != nil {
+		return DojoRun{}, err
+	}
+	if out.Annotations, err = collect(rows, func(r pgx.Rows) (Annotation, error) { return scanAnnotation(r) }); err != nil {
+		return DojoRun{}, err
+	}
+	var prev int
+	err = s.db.QueryRow(ctx, `SELECT p.findings FROM dojo_pushes p JOIN scan_runs r ON r.id = p.run_id
+		WHERE p.ok AND r.config_id IS NOT DISTINCT FROM $1 ORDER BY p.at DESC, p.id DESC LIMIT 1`, configID).Scan(&prev)
+	switch {
+	case err == nil:
+		out.PrevFindings = &prev
+	case !errors.Is(err, pgx.ErrNoRows):
+		return DojoRun{}, err
+	}
+	return out, nil
+}
