@@ -297,3 +297,34 @@ func TestSuppressGeneric(t *testing.T) {
 		})
 	}
 }
+
+func TestProbeCacheKeyIncludesHeaders(t *testing.T) {
+	a := mustParse(t, "id: a1\nname: A\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: path, path: /v, status: [200]}\n")
+	b := mustParse(t, "id: b1\nname: B\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: path, path: /v, status: [200], headers: {Accept: application/json}}\n")
+	f := &fakeFetcher{resp: map[string]ProbeResponse{"GET /v": {Status: 200}}}
+
+	assert.Len(t, 2, match(NewEngine([]*Signature{a, b}, f), svc(80, ""), httpObs(80, "", "", nil)))
+	assert.Len(t, 2, f.Calls())
+}
+
+func TestProbeGateGetsUnmappedIP(t *testing.T) {
+	a := mustParse(t, "id: a1\nname: A\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: path, path: /admin, status: [200]}\n")
+	s := svc(80, "")
+	s.Key.IP = netip.MustParseAddr("::ffff:10.20.1.5")
+	var asked netip.Addr
+	e := NewEngine([]*Signature{a}, &fakeFetcher{})
+	e.ProbeGate = func(h netip.Addr) bool { asked = h; return false }
+
+	match(e, s, httpObs(80, "", "", nil))
+
+	assert.Equal(t, netip.MustParseAddr("10.20.1.5"), asked)
+}
+
+// Body regexes see at most the first maxRegexInput bytes.
+func TestBodyRegexInputCapped(t *testing.T) {
+	s := mustParse(t, "id: tail\nname: T\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: body, regex: 'TAIL'}\n")
+	head := string(bytes.Repeat([]byte("a"), maxRegexInput))
+
+	assert.Len(t, 0, match(NewEngine([]*Signature{s}, nil), svc(80, ""), httpObs(80, "", head+"TAIL", nil)))
+	assert.Len(t, 1, match(NewEngine([]*Signature{s}, nil), svc(80, ""), httpObs(80, "", head[10:]+"TAIL", nil)))
+}

@@ -9,7 +9,8 @@ attack: [T1078, T1133]
 remediation: 'Expose the administration panel only to the management network or over VPN, and enforce MFA.'
 matchers:
   - type: title
-    regex: '(?i)\badmin(?:istration|istrator)?\s*(?:panel|console|login|dashboard)\b'
+    # Polish titles use RE2 escapes: \x{0105} = a with ogonek; (?i) folds upper case.
+    regex: '(?i)\b(?:admin(?:istration|istrator)?\s*(?:panel|console|login|dashboard)|panel (?:administracyjny|administratora|zarz\x{0105}dzania))\b'
   - type: path
     path: /admin
     status: [401]

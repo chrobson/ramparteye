@@ -11,4 +11,6 @@ matchers:
   - type: hostname
     regex: '(?i)(?:^|[.-])(?:staging|stage|stg|dev|devel|develop|test|testing|uat|qa|preprod|sandbox)(?:[0-9]*)(?:[.-]|$)'
   - type: title
-    regex: '(?i)\b(?:staging|preprod|test(?:ing)? (?:environment|server|site|instance)|dev(?:elopment)? (?:environment|server|instance))\b'
+    # Polish titles use RE2 escapes: \x{015b} = s with acute; (?i) folds upper case.
+    # \b is ASCII-only, so the Polish words are anchored on a non-letter.
+    regex: '(?i)\b(?:staging|preprod|test(?:ing)? (?:environment|server|site|instance)|dev(?:elopment)? (?:environment|server|instance))\b|(?:^|\P{L})\x{015b}rodowisko (?:testowe|deweloperskie)\b'

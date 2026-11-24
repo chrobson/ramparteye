@@ -221,3 +221,85 @@ func TestBuiltinMetaCoverage(t *testing.T) {
 		}
 	}
 }
+
+func TestRegexCostBounded(t *testing.T) {
+	tests := []struct {
+		testN string
+
+		regex string
+		want  string
+	}{
+		{"counted repeat over 100", `.{101}`, "counted repeat"},
+		{"repeat min over 100", `a{200,}`, "counted repeat"},
+		{"large program from nested repeats", `(?:a{100}){10}(?:b{100}){10}(?:c{100}){10}d{100}`, "regex too complex"},
+		{"long repeated wildcards", strings.Repeat(`.{99}`, 40), "regex too complex"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.testN, func(t *testing.T) {
+			doc := "id: x-cost\nname: X\ncategory: other\nconfidence: 5\nmatchers:\n  - type: body\n    regex: '" + tt.regex + "'\n"
+
+			_, err := Parse([]byte(doc))
+
+			assert.ErrorContain(t, tt.want, err)
+		})
+	}
+	_, err := Parse([]byte("id: x-ok\nname: X\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: body, regex: '[0-9a-f]{32}'}\n"))
+	assert.NoError(t, err)
+}
+
+// Only allowlisted request headers pass, so a path probe cannot override
+// the method, rewrite the URL or spoof the client address.
+func TestPathProbeHeaderAllowlist(t *testing.T) {
+	refused := []string{"X-HTTP-Method-Override", "X-HTTP-Method", "X-Method-Override", "X-Original-URL",
+		"X-Rewrite-URL", "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "Max-Forwards", "Range", "X-Custom"}
+	for _, h := range refused {
+		doc := "id: x-hdr\nname: X\ncategory: other\nconfidence: 5\nmatchers:\n  - type: path\n    path: /a\n    status: [200]\n    headers: {" + h + ": x}\n"
+
+		_, err := Parse([]byte(doc))
+
+		assert.ErrorContain(t, `request header "`+h+`" is not allowed`, err)
+	}
+	for _, h := range []string{"Accept", "Accept-Language", "X-Requested-With", "If-None-Match", "If-Modified-Since"} {
+		doc := "id: x-hdr\nname: X\ncategory: other\nconfidence: 5\nmatchers:\n  - type: path\n    path: /a\n    status: [200]\n    headers: {" + h + ": x}\n"
+
+		_, err := Parse([]byte(doc))
+
+		assert.NoError(t, err, h)
+	}
+}
+
+func TestPathEncodingsRefused(t *testing.T) {
+	for _, p := range []string{"/a%25", "/a%0a", "/a%1F", "/a%7f", "/a%2e"} {
+		doc := "id: x-enc\nname: X\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: path, path: '" + p + "', status: [200]}\n"
+
+		_, err := Parse([]byte(doc))
+
+		assert.Error(t, err, p)
+	}
+}
+
+// Polish titles are matched through RE2 \x{...} escapes, so the YAML stays
+// ASCII; (?i) covers upper-case forms.
+func TestBuiltinPolishTitles(t *testing.T) {
+	byID := map[string]*Signature{}
+	for _, s := range builtins(t) {
+		byID[s.ID] = s
+	}
+	tests := []struct {
+		id, title string
+	}{
+		{"admin-panel", "Panel administracyjny"},
+		{"admin-panel", "Panel administratora - logowanie"},
+		{"admin-panel", "Panel zarządzania"},
+		{"admin-panel", "PANEL ZARZĄDZANIA"},
+		{"staging-env", "Środowisko testowe"},
+		{"staging-env", "Sklep - ŚRODOWISKO DEWELOPERSKIE"},
+	}
+	for _, tt := range tests {
+		e := NewEngine([]*Signature{byID[tt.id]}, nil)
+
+		ds := match(e, svc(80, ""), httpObs(80, tt.title, "", nil))
+
+		assert.Len(t, 1, ds, "%s: %q", tt.id, tt.title)
+	}
+}

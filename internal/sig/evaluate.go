@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,18 @@ import (
 
 // maxEvidence caps one evidence value in bytes.
 const maxEvidence = 200
+
+// maxRegexInput caps the body bytes a regex reads (the start of the page
+// carries the fingerprints; this bounds the cost of every body match).
+const maxRegexInput = 256 << 10
+
+// regexInput returns the part of a body regexes are run on.
+func regexInput(b []byte) string {
+	if len(b) > maxRegexInput {
+		b = b[:maxRegexInput]
+	}
+	return string(b)
+}
 
 // evaluator evaluates signatures against one service observation.
 type evaluator struct {
@@ -239,7 +252,7 @@ func (ev *evaluator) positive(m *MatcherSpec) (string, string, bool) {
 			return "title", v, true
 		}
 	case TypeBody:
-		if v, ok := ev.findRe(m.re, string(ev.obs.Body)); ok {
+		if v, ok := ev.findRe(m.re, regexInput(ev.obs.Body)); ok {
 			return "body", v, true
 		}
 	case TypeFavicon:
@@ -349,12 +362,12 @@ func (ev *evaluator) probe(m *MatcherSpec) *ProbeResponse {
 	if ev.fetcher == nil {
 		return nil
 	}
-	key := m.Method + " " + m.Path
+	key := probeKey(m)
 	if resp, cached := ev.cache[key]; cached {
 		return resp
 	}
 	var resp *ProbeResponse
-	if ev.ctx.Err() == nil && (ev.gate == nil || ev.gate(ev.svc.Key.IP)) {
+	if ev.ctx.Err() == nil && (ev.gate == nil || ev.gate(ev.svc.Key.IP.Unmap())) {
 		r, err := ev.fetcher.Fetch(ev.ctx, ev.svc, ev.obs, ProbeRequest{Method: m.Method, Path: m.Path, Headers: m.Headers})
 		if err == nil {
 			resp = &r
@@ -364,6 +377,20 @@ func (ev *evaluator) probe(m *MatcherSpec) *ProbeResponse {
 		ev.cache[key] = resp // a cancelled probe is not remembered as failed
 	}
 	return resp
+}
+
+// probeKey identifies a request: method, path and sorted headers.
+func probeKey(m *MatcherSpec) string {
+	key := m.Method + " " + m.Path
+	names := make([]string, 0, len(m.Headers))
+	for k := range m.Headers {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		key += "\n" + http.CanonicalHeaderKey(k) + ": " + m.Headers[k]
+	}
+	return key
 }
 
 func (ev *evaluator) path(m *MatcherSpec) (string, string, bool) {
@@ -398,7 +425,7 @@ func (ev *evaluator) path(m *MatcherSpec) (string, string, bool) {
 		}
 	}
 	if m.re != nil {
-		v, ok := ev.findRe(m.re, string(resp.Body))
+		v, ok := ev.findRe(m.re, regexInput(resp.Body))
 		if !ok {
 			return "", "", false
 		}

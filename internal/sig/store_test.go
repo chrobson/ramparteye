@@ -1,8 +1,10 @@
 package sig
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/ctx42/testing/pkg/assert"
@@ -13,9 +15,10 @@ import (
 
 // memStore is an in-memory signatures table with store.Store semantics.
 type memStore struct {
-	rows   []store.SignatureRow
-	synced []store.SignatureRow
-	err    error
+	rows       []store.SignatureRow
+	synced     []store.SignatureRow
+	collisions []string
+	err        error
 }
 
 func (m *memStore) Signatures(context.Context) ([]store.SignatureRow, error) {
@@ -31,9 +34,9 @@ func (m *memStore) Signature(_ context.Context, id string) (store.SignatureRow, 
 	return store.SignatureRow{}, store.ErrSignatureNotFound
 }
 
-func (m *memStore) SyncBuiltinSignatures(_ context.Context, rows []store.SignatureRow) error {
+func (m *memStore) SyncBuiltinSignatures(_ context.Context, rows []store.SignatureRow) ([]string, error) {
 	m.synced = rows
-	return m.err
+	return m.collisions, m.err
 }
 
 func (m *memStore) CreateCustomSignature(_ context.Context, r store.SignatureRow) error {
@@ -76,7 +79,7 @@ const customDoc = "id: my-app\nname: My app\ncategory: other\nconfidence: 70\ncw
 func TestSyncBuiltin(t *testing.T) {
 	st := &memStore{}
 
-	err := SyncBuiltin(context.Background(), st)
+	err := SyncBuiltin(context.Background(), st, nil)
 
 	assert.NoError(t, err)
 	assert.Len(t, 41, st.synced)
@@ -193,4 +196,41 @@ func TestDBStoreUpdateSetEnabledDelete(t *testing.T) {
 
 	assert.NoError(t, db.Delete(ctx, "my-app"))
 	assert.Len(t, 0, st.rows)
+}
+
+func TestSyncBuiltinLogsCollisions(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	st := &memStore{collisions: []string{"nginx"}}
+
+	err := SyncBuiltin(context.Background(), st, log)
+
+	assert.NoError(t, err)
+	assert.Contain(t, "nginx", buf.String())
+	assert.Contain(t, "WARN", buf.String())
+}
+
+// What is stored is what Parse made of the YAML, not the caller's struct.
+func TestDBStoreStoresParsedRaw(t *testing.T) {
+	st := &memStore{}
+	s := mustParse(t, customDoc)
+	s.Name = "Changed after parsing"
+	s.Matchers[0].Method = "POST"
+
+	assert.NoError(t, NewDBStore(st).Create(context.Background(), s))
+	assert.Equal(t, "My app", st.rows[0].Name)
+
+	bad := mustParse(t, customDoc)
+	bad.Raw = "id: my-app\n"
+	assert.Error(t, NewDBStore(st).Create(context.Background(), bad))
+	assert.Len(t, 1, st.rows)
+}
+
+func TestDBStoreKeepsNucleiFlags(t *testing.T) {
+	st := &memStore{}
+	s := mustParse(t, customDoc)
+	s.Source, s.Enabled, s.PathProbe = SourceNuclei, false, true
+
+	assert.NoError(t, NewDBStore(st).Create(context.Background(), s))
+	assert.Equal(t, store.SignatureRow{ID: "my-app", Name: "My app", YAML: customDoc, Source: SourceNuclei, PathProbe: true}, st.rows[0])
 }

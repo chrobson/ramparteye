@@ -1,0 +1,11 @@
+# want: request header "X-Rewrite-URL" is not allowed
+id: bad-x-rewrite-url-header
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /admin
+    headers:
+      X-Rewrite-URL: x
+    status: [200]

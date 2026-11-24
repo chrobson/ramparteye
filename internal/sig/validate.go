@@ -2,8 +2,10 @@ package sig
 
 import (
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
+	"regexp/syntax"
 	"slices"
 	"strings"
 
@@ -18,6 +20,10 @@ const (
 	maxPathLen   = 256
 	maxHeaders   = 4
 	maxRegexLen  = 1024
+	// RE2 runs in time linear in input x program size, and a match cannot
+	// be interrupted, so the program size and counted repeats are bounded.
+	maxRegexInst   = 3000
+	maxRegexRepeat = 100
 
 	maxCWE         = 5
 	maxAttack      = 8
@@ -199,6 +205,10 @@ func validateMatcher(m *MatcherSpec) []string {
 			add("%s regex: %v", field, err)
 			return nil
 		}
+		if msg := regexCost(expr); msg != "" {
+			add("%s %s", field, msg)
+			return nil
+		}
 		return re
 	}
 	// Fields that only make sense on a path probe.
@@ -292,8 +302,10 @@ func validatePathMatcher(m *MatcherSpec) []string {
 	default:
 		add("method %q not allowed (only GET or HEAD)", m.Method)
 	}
-	if err := checkPath(m.Path); err != "" {
-		add("%s", err)
+	if msg := checkPath(m.Path); msg != "" {
+		add("%s", msg)
+	} else if err := httpfp.CheckProbePath(m.Path); err != nil {
+		add("%v", err) // FetchPath would refuse it: Validate and FetchPath agree
 	}
 	if len(m.Headers) > maxHeaders {
 		add("too many request headers (max %d)", maxHeaders)
@@ -304,11 +316,9 @@ func validatePathMatcher(m *MatcherSpec) []string {
 			add("invalid request header name %q", k)
 		case httpfp.IsSensitiveHeader(k):
 			add("auth/credential header %q is not allowed", k)
-		case strings.EqualFold(k, "Host") || strings.EqualFold(k, "Content-Length") ||
-			strings.EqualFold(k, "Transfer-Encoding") || strings.EqualFold(k, "Content-Type") ||
-			strings.EqualFold(k, "User-Agent"):
-			add("request header %q is not allowed", k)
-		case strings.ContainsAny(v, "\r\n") || len(v) > 256:
+		case httpfp.CheckProbeHeaders(http.Header{k: nil}) != nil:
+			add("request header %q is not allowed (allowed: Accept, Accept-Language, X-Requested-With, If-None-Match, If-Modified-Since)", k)
+		case httpfp.CheckProbeHeaders(http.Header{k: {v}}) != nil:
 			add("invalid value for request header %q", k)
 		}
 	}
@@ -323,6 +333,38 @@ func validatePathMatcher(m *MatcherSpec) []string {
 		add("header_regex requires header")
 	}
 	return p
+}
+
+// regexCost refuses expressions whose compiled program is too large or
+// that use a counted repeat above maxRegexRepeat ("" = acceptable).
+func regexCost(expr string) string {
+	re, err := syntax.Parse(expr, syntax.Perl)
+	if err != nil {
+		return "regex: " + err.Error()
+	}
+	if n := maxRepeat(re); n > maxRegexRepeat {
+		return fmt.Sprintf("regex: counted repeat {%d} too large (max %d)", n, maxRegexRepeat)
+	}
+	prog, err := syntax.Compile(re.Simplify())
+	if err != nil {
+		return "regex: " + err.Error()
+	}
+	if len(prog.Inst) > maxRegexInst {
+		return fmt.Sprintf("regex too complex (%d instructions, max %d)", len(prog.Inst), maxRegexInst)
+	}
+	return ""
+}
+
+// maxRepeat returns the largest bound of any counted repeat in re.
+func maxRepeat(re *syntax.Regexp) int {
+	n := 0
+	if re.Op == syntax.OpRepeat {
+		n = max(re.Min, re.Max)
+	}
+	for _, sub := range re.Sub {
+		n = max(n, maxRepeat(sub))
+	}
+	return n
 }
 
 func checkCodes(codes []int) []string {

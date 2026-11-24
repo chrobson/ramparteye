@@ -1,0 +1,8 @@
+# want: counted repeat
+id: bad-counted-repeat
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: body
+    regex: '.{999}x'

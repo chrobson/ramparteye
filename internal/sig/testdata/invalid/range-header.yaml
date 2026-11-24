@@ -1,0 +1,11 @@
+# want: request header "Range" is not allowed
+id: bad-range-header
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /admin
+    headers:
+      Range: x
+    status: [200]

@@ -1,0 +1,11 @@
+# want: request header "Forwarded" is not allowed
+id: bad-forwarded-header
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /admin
+    headers:
+      Forwarded: x
+    status: [200]

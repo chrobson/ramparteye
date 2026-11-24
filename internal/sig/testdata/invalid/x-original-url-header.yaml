@@ -1,0 +1,11 @@
+# want: request header "X-Original-URL" is not allowed
+id: bad-x-original-url-header
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /admin
+    headers:
+      X-Original-URL: x
+    status: [200]

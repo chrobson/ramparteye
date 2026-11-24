@@ -1,0 +1,9 @@
+# want: forbidden character
+id: bad-encoded-ctl
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /a%0d%0aX
+    status: [200]

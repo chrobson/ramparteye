@@ -49,23 +49,40 @@ func scanSignature(row pgx.Row) (SignatureRow, error) {
 	return r, err
 }
 
-// SyncBuiltinSignatures upserts the built-in signatures (Source and Enabled
-// of the rows are ignored). The enabled flag set by users is kept, and a
-// custom or nuclei signature with the same id is left untouched.
-func (s *Store) SyncBuiltinSignatures(ctx context.Context, sigs []SignatureRow) error {
-	return s.InTx(ctx, func(tx *Store) error {
+// SyncBuiltinSignatures makes the built-in rows match sigs (Source and
+// Enabled of the rows are ignored): new ones are inserted enabled, existing
+// ones get the new name, YAML and path probe flag but keep the enabled flag
+// set by users, and built-in rows no longer in sigs are deleted. A custom
+// or nuclei signature with the id of a built-in is left untouched; those
+// ids are returned as collisions.
+func (s *Store) SyncBuiltinSignatures(ctx context.Context, sigs []SignatureRow) ([]string, error) {
+	var collisions []string
+	err := s.InTx(ctx, func(tx *Store) error {
+		collisions = nil
+		ids := make([]string, 0, len(sigs))
 		for _, sg := range sigs {
-			if _, err := tx.db.Exec(ctx, `
+			ids = append(ids, sg.ID)
+			var source string
+			err := tx.db.QueryRow(ctx, `
 				INSERT INTO signatures (id, name, yaml, enabled, source, path_probe)
 				VALUES ($1, $2, $3, true, 'builtin', $4)
 				ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, yaml = EXCLUDED.yaml,
 					path_probe = EXCLUDED.path_probe
-				WHERE signatures.source = 'builtin'`, sg.ID, sg.Name, sg.YAML, sg.PathProbe); err != nil {
+				WHERE signatures.source = 'builtin'
+				RETURNING source`, sg.ID, sg.Name, sg.YAML, sg.PathProbe).Scan(&source)
+			switch {
+			case errors.Is(err, pgx.ErrNoRows): // conflict with a non-built-in row
+				collisions = append(collisions, sg.ID)
+			case err != nil:
 				return fmt.Errorf("signature %s: %w", sg.ID, err)
 			}
 		}
+		if _, err := tx.db.Exec(ctx, `DELETE FROM signatures WHERE source = 'builtin' AND NOT (id = ANY($1))`, ids); err != nil {
+			return fmt.Errorf("delete dropped built-in signatures: %w", err)
+		}
 		return nil
 	})
+	return collisions, err
 }
 
 // Signatures returns every signature, built-ins first, then by id.

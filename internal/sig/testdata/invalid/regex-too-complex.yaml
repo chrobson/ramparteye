@@ -1,0 +1,8 @@
+# want: regex too complex
+id: bad-regex-too-complex
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: body
+    regex: '(?:a{100}){10}(?:b{100}){10}(?:c{100}){10}d{100}'

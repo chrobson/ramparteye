@@ -75,11 +75,11 @@ func TestSignatures(t *testing.T) {
 		{ID: "nginx", Name: "nginx", YAML: "id: nginx"},
 		{ID: "wordpress", Name: "WP", YAML: "id: wordpress", PathProbe: true},
 	}
-	assert.NoError(t, s.SyncBuiltinSignatures(ctx, builtin))
+	assert.Len(t, 0, must.Value(s.SyncBuiltinSignatures(ctx, builtin)))
 	assert.NoError(t, s.SetSignatureEnabled(ctx, "nginx", false))
 	builtin[0].YAML = "id: nginx\n# v2"
 	builtin[0].PathProbe = true
-	assert.NoError(t, s.SyncBuiltinSignatures(ctx, builtin)) // keeps enabled=false, updates YAML
+	assert.Len(t, 0, must.Value(s.SyncBuiltinSignatures(ctx, builtin))) // keeps enabled=false, updates YAML
 
 	r := must.Value(s.Signature(ctx, "nginx"))
 	assert.False(t, r.Enabled)
@@ -133,6 +133,23 @@ func TestSignatures(t *testing.T) {
 	assert.ErrorIs(t, store.ErrSignatureNotFound, err)
 	assert.ErrorIs(t, store.ErrSignatureNotFound, s.DeleteCustomSignature(ctx, "zz-custom"))
 	assert.ErrorIs(t, store.ErrSignatureNotFound, s.SetSignatureEnabled(ctx, "zz-custom", true))
+}
+
+func TestSyncBuiltinSignaturesRemovesDroppedAndReportsCollisions(t *testing.T) {
+	s, _ := newStore(t)
+	_ = must.Value(s.SyncBuiltinSignatures(ctx, []store.SignatureRow{{ID: "old", Name: "O", YAML: "id: old"}, {ID: "keep", Name: "K", YAML: "id: keep"}}))
+	assert.NoError(t, s.CreateCustomSignature(ctx, store.SignatureRow{ID: "mine", Name: "M", YAML: "id: mine", Enabled: true}))
+
+	collisions, err := s.SyncBuiltinSignatures(ctx, []store.SignatureRow{{ID: "keep", Name: "K", YAML: "id: keep"}, {ID: "mine", Name: "B", YAML: "id: mine-builtin"}})
+
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"mine"}, collisions)
+	_, err = s.Signature(ctx, "old")
+	assert.ErrorIs(t, store.ErrSignatureNotFound, err)
+	mine := must.Value(s.Signature(ctx, "mine"))
+	assert.Equal(t, store.SourceCustom, mine.Source) // custom row left untouched
+	assert.Equal(t, "id: mine", mine.YAML)
+	assert.Len(t, 2, must.Value(s.Signatures(ctx)))
 }
 
 func TestSignatureSourceConstraint(t *testing.T) {

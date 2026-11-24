@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/store"
@@ -18,7 +19,7 @@ type Lister interface {
 type Store interface {
 	Lister
 	Signature(ctx context.Context, id string) (store.SignatureRow, error)
-	SyncBuiltinSignatures(ctx context.Context, rows []store.SignatureRow) error
+	SyncBuiltinSignatures(ctx context.Context, rows []store.SignatureRow) ([]string, error)
 	CreateCustomSignature(ctx context.Context, row store.SignatureRow) error
 	UpdateCustomSignature(ctx context.Context, id string, row store.SignatureRow) error
 	SetSignatureEnabled(ctx context.Context, id string, enabled bool) error
@@ -35,11 +36,13 @@ func Row(s *Signature) store.SignatureRow {
 	}
 }
 
-// SyncBuiltin upserts the embedded signatures into the signatures table
-// (call once at startup, after migrations).
+// SyncBuiltin makes the built-in rows of the signatures table match the
+// embedded set (call once at startup, after migrations). A custom signature
+// that holds the id of a built-in keeps it; each such collision is logged
+// as a warning on log (nil = slog.Default()).
 func SyncBuiltin(ctx context.Context, st interface {
-	SyncBuiltinSignatures(ctx context.Context, rows []store.SignatureRow) error
-}) error {
+	SyncBuiltinSignatures(ctx context.Context, rows []store.SignatureRow) ([]string, error)
+}, log *slog.Logger) error {
 	sigs, err := Builtin()
 	if err != nil {
 		return err
@@ -48,7 +51,14 @@ func SyncBuiltin(ctx context.Context, st interface {
 	for _, s := range sigs {
 		rows = append(rows, Row(s))
 	}
-	return st.SyncBuiltinSignatures(ctx, rows)
+	collisions, err := st.SyncBuiltinSignatures(ctx, rows)
+	if log == nil {
+		log = slog.Default()
+	}
+	for _, id := range collisions {
+		log.Warn("custom signature shadows a built-in signature; the built-in is not loaded", "id", id)
+	}
+	return err
 }
 
 // LoadEnabled parses every enabled signature from the database, keeping
@@ -163,21 +173,22 @@ func (d *DBStore) Delete(ctx context.Context, id string) error {
 	return d.st.DeleteCustomSignature(ctx, id)
 }
 
-// customRow validates s and converts it into a non-built-in row.
+// customRow re-parses s.Raw and converts the result into a non-built-in
+// row, so the stored YAML is exactly what was validated. Source, Enabled and
+// PathProbe come from s (Source empty = custom).
 func customRow(s *Signature) (store.SignatureRow, error) {
 	if s.Source == SourceBuiltin {
 		return store.SignatureRow{}, fmt.Errorf("%w: %q", store.ErrSignatureBuiltin, s.ID)
 	}
-	if err := validate(s); err != nil {
+	parsed, err := Parse([]byte(s.Raw))
+	if err != nil {
 		return store.SignatureRow{}, err
 	}
-	if s.Raw == "" {
-		return store.SignatureRow{}, fmt.Errorf("signature %s: no source YAML", s.ID)
+	parsed.Source = s.Source
+	if parsed.Source == "" {
+		parsed.Source = SourceCustom
 	}
-	row := Row(s)
-	if row.Source == "" {
-		row.Source = SourceCustom
-	}
-	row.PathProbe = row.PathProbe || s.hasPathMatcher()
-	return row, nil
+	parsed.Enabled = s.Enabled
+	parsed.PathProbe = parsed.PathProbe || s.PathProbe
+	return Row(parsed), nil
 }

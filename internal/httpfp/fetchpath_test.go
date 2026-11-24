@@ -143,6 +143,19 @@ func Test_HTTPProber_FetchPath_refuses(t *testing.T) {
 		{"cookie header", http.MethodGet, "/x", http.Header{"Cookie": {"a=b"}}, ErrBadHeader},
 		{"host header", http.MethodGet, "/x", http.Header{"Host": {"evil.test"}}, ErrBadHeader},
 		{"content-length", http.MethodGet, "/x", http.Header{"Content-Length": {"5"}}, ErrBadHeader},
+		{"method override", http.MethodGet, "/x", http.Header{"X-Http-Method-Override": {"DELETE"}}, ErrBadHeader},
+		{"x-http-method", http.MethodGet, "/x", http.Header{"X-Http-Method": {"PUT"}}, ErrBadHeader},
+		{"x-method-override", http.MethodGet, "/x", http.Header{"X-Method-Override": {"POST"}}, ErrBadHeader},
+		{"original url", http.MethodGet, "/x", http.Header{"X-Original-Url": {"/admin/login"}}, ErrBadHeader},
+		{"rewrite url", http.MethodGet, "/x", http.Header{"X-Rewrite-Url": {"/admin/login"}}, ErrBadHeader},
+		{"forwarded", http.MethodGet, "/x", http.Header{"Forwarded": {"for=127.0.0.1"}}, ErrBadHeader},
+		{"x-forwarded-for", http.MethodGet, "/x", http.Header{"X-Forwarded-For": {"127.0.0.1"}}, ErrBadHeader},
+		{"max-forwards", http.MethodGet, "/x", http.Header{"Max-Forwards": {"0"}}, ErrBadHeader},
+		{"range", http.MethodGet, "/x", http.Header{"Range": {"bytes=0-1"}}, ErrBadHeader},
+		{"encoded percent", http.MethodGet, "/a%252e%252e/b", nil, ErrBadPath},
+		{"encoded newline", http.MethodGet, "/a%0d%0aX", nil, ErrBadPath},
+		{"encoded control", http.MethodGet, "/a%1F", nil, ErrBadPath},
+		{"encoded del", http.MethodGet, "/a%7F", nil, ErrBadPath},
 	}
 	for _, tt := range tests {
 		t.Run(tt.testN, func(t *testing.T) {
@@ -178,4 +191,13 @@ func Test_HTTPProber_FetchPath_bad_scheme(t *testing.T) {
 	_, err := p.FetchPath(context.Background(), ep, http.MethodGet, "/x", nil)
 
 	assert.ErrorContain(t, "unsupported scheme", err)
+}
+
+func Test_CheckProbeHeaders_allowlist(t *testing.T) {
+	ok := http.Header{"Accept": {"a"}, "Accept-Language": {"en"}, "X-Requested-With": {"XMLHttpRequest"},
+		"If-None-Match": {`"x"`}, "If-Modified-Since": {"Mon, 01 Jan 2024 00:00:00 GMT"}}
+
+	assert.NoError(t, CheckProbeHeaders(ok))
+	assert.NoError(t, CheckProbeHeaders(http.Header{"accept": {"a"}})) // case-insensitive
+	assert.ErrorIs(t, ErrBadHeader, CheckProbeHeaders(http.Header{"X-Custom": {"a"}}))
 }
