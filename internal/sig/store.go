@@ -135,11 +135,6 @@ type DBStore struct {
 // NewDBStore returns a DBStore over st (usually *store.Store).
 func NewDBStore(st Store) *DBStore { return &DBStore{st: st} }
 
-// List returns every stored signature row.
-func (d *DBStore) List(ctx context.Context) ([]store.SignatureRow, error) {
-	return d.st.Signatures(ctx)
-}
-
 // Get returns one stored signature row.
 func (d *DBStore) Get(ctx context.Context, id string) (store.SignatureRow, error) {
 	return d.st.Signature(ctx, id)

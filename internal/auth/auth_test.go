@@ -139,7 +139,9 @@ func TestPasswordLimits(t *testing.T) {
 // handlerChain builds Middleware -> mux with a protected POST route.
 func handlerChain(f *fakeStore, now func() time.Time) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("POST /annotations", Require(PermResultsEdit)(okHandler()))
+	mux.Handle("POST /annotations", RequireWith(PermResultsEdit, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	}))(okHandler()))
 	mux.Handle("/", okHandler())
 	return Middleware(f, now)(mux)
 }

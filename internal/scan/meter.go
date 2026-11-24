@@ -1,7 +1,6 @@
 package scan
 
 import (
-	"net/netip"
 	"regexp"
 	"strconv"
 )
@@ -52,32 +51,6 @@ func EstimatePackets(st Stats, args []string, raw int64, have bool) int64 {
 		}
 	}
 	return 0
-}
-
-// TargetOperands returns the target addresses and prefixes of a command line
-// built by this package (the operands after "-oX -"). Operands that are not
-// literal addresses or prefixes are skipped; use vetOperands for enforcement.
-func TargetOperands(args []string) []netip.Prefix {
-	var out []netip.Prefix
-	for _, a := range operandArgs(args) {
-		if p, err := netip.ParsePrefix(a); err == nil {
-			out = append(out, p.Masked())
-		} else if ip, err := netip.ParseAddr(a); err == nil {
-			ip = ip.Unmap()
-			out = append(out, netip.PrefixFrom(ip, ip.BitLen()))
-		}
-	}
-	return out
-}
-
-// operandArgs returns every argument after the first "-oX -" pair.
-func operandArgs(args []string) []string {
-	for i := 0; i+1 < len(args); i++ {
-		if args[i] == "-oX" && args[i+1] == "-" {
-			return args[i+2:]
-		}
-	}
-	return nil
 }
 
 var rawPacketsRe = regexp.MustCompile(`Raw packets sent: (\d+)`)

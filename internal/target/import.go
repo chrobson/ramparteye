@@ -33,18 +33,12 @@ type entry struct {
 	err   error // decode-level problem with this record
 }
 
-// ImportCSV reads "value,tags" rows (tags separated by ';'). A header row
-// whose first cell is "value", blank lines and '#' comments are skipped. The
-// first invalid row aborts the import with an error naming its line. Duplicate
-// values are merged (tags are combined). Scope is not checked here: callers
-// run Resolve on every returned target.
-func ImportCSV(r io.Reader) ([]model.Target, error) {
-	ts, _, err := ImportCSVLines(r)
-	return ts, err
-}
-
-// ImportCSVLines is ImportCSV that also returns, for every target, the
-// source line of its first occurrence.
+// ImportCSVLines reads "value,tags" rows (tags separated by ';'). A header
+// row whose first cell is "value", blank lines and '#' comments are skipped.
+// The first invalid row aborts the import with an error naming its line.
+// Duplicate values are merged (tags are combined). It also returns, for every
+// target, the source line of its first occurrence. Scope is not checked here:
+// callers run Resolve on every returned target.
 func ImportCSVLines(r io.Reader) ([]model.Target, []int, error) {
 	data, err := readLimited(r)
 	if err != nil {
@@ -57,15 +51,10 @@ func ImportCSVLines(r io.Reader) ([]model.Target, []int, error) {
 	return build(es)
 }
 
-// ImportJSON reads [{"value": "...", "tags": ["a","b"]}]; tags may also be a
-// single "a;b" string. Semantics otherwise match ImportCSV.
-func ImportJSON(r io.Reader) ([]model.Target, error) {
-	ts, _, err := ImportJSONLines(r)
-	return ts, err
-}
-
-// ImportJSONLines is ImportJSON that also returns, for every target, the
-// source line where its first object starts.
+// ImportJSONLines reads [{"value": "...", "tags": ["a","b"]}]; tags may
+// also be a single "a;b" string. Semantics otherwise match ImportCSVLines. It
+// also returns, for every target, the source line where its first object
+// starts.
 func ImportJSONLines(r io.Reader) ([]model.Target, []int, error) {
 	data, err := readLimited(r)
 	if err != nil {

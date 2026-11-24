@@ -28,12 +28,6 @@ func NextWindow(now time.Time, start, end time.Duration) (from, to time.Time) {
 	return at(1, start), at(1+endDays, end)
 }
 
-// InWindow reports whether now lies inside the window [start, end).
-func InWindow(now time.Time, start, end time.Duration) bool {
-	from, to := NextWindow(now, start, end)
-	return !now.Before(from) && now.Before(to)
-}
-
 func clampDay(d time.Duration) time.Duration {
 	return min(max(d, 0), 24*time.Hour-time.Nanosecond)
 }

@@ -192,7 +192,7 @@ func TestDBStoreUpdateSetEnabledDelete(t *testing.T) {
 	assert.Contain(t, "v2", must.Value(db.Get(ctx, "my-app")).YAML)
 
 	assert.NoError(t, db.SetEnabled(ctx, "my-app", false))
-	assert.False(t, must.Value(db.List(ctx))[0].Enabled)
+	assert.False(t, must.Value(db.Get(ctx, "my-app")).Enabled)
 
 	assert.NoError(t, db.Delete(ctx, "my-app"))
 	assert.Len(t, 0, st.rows)

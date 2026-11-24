@@ -81,14 +81,8 @@ func windowOf(flips []model.Flip, cfg Config) []model.Flip {
 	return flips
 }
 
-// Advance applies run runID to the hosts in scope and returns their next
-// states, sorted by IP. It stamps FirstSeen/LastSeen with the current time;
-// use AdvanceAt to supply the time.
-func Advance(known []model.HostState, obs []model.HostObs, curr []model.ServiceObs, runID int64, cfg Config) []model.HostState {
-	return AdvanceAt(known, obs, curr, runID, time.Now(), cfg)
-}
-
-// AdvanceAt is Advance with an explicit clock. known are the current states
+// AdvanceAt applies run runID to the hosts in scope and returns their next
+// states, sorted by IP, stamping FirstSeen/LastSeen with now. known are the current states
 // of hosts covered by the run; a known host absent from obs (and without
 // services in curr) counts as a miss. A host is up if obs says so or it has
 // a service in curr. Hosts seen for the first time are tracked only once

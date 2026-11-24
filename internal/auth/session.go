@@ -243,16 +243,8 @@ func passwordChangeExempt(path string) bool {
 	return path == PasswordPath || path == LogoutPath || strings.HasPrefix(path, StaticPrefix)
 }
 
-// Require demands perm. No session: see RequireUser. Missing permission:
-// a plain 403.
-func Require(perm Perm) func(http.Handler) http.Handler {
-	return RequireWith(perm, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "forbidden: missing permission "+string(perm), http.StatusForbidden)
-	}))
-}
-
-// RequireWith is Require with forbidden serving requests whose user lacks
-// perm.
+// RequireWith demands perm. No session: see RequireUser. Missing permission:
+// forbidden serves the request.
 func RequireWith(perm Perm, forbidden http.Handler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

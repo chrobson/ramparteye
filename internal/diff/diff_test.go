@@ -195,7 +195,7 @@ func TestAdvance(t *testing.T) {
 	}
 	curr := []model.ServiceObs{svc(2, "10.0.0.8", 80, "nginx", "")} // service implies up
 
-	have := Advance(known, obs, curr, 2, testCfg)
+	have := AdvanceAt(known, obs, curr, 2, t0, testCfg)
 
 	var got []string
 	for _, h := range have {

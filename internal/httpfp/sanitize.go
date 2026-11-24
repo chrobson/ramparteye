@@ -6,8 +6,6 @@ import (
 	"unicode/utf8"
 )
 
-func validUTF8(s string) bool { return utf8.ValidString(s) }
-
 // clean makes s safe to store: valid UTF-8, control characters dropped, at
 // most max bytes (cut on a rune boundary).
 func clean(s string, max int) string {

@@ -122,9 +122,7 @@ func TestIrregularPattern(t *testing.T) {
 	assert.Equal(t, PatternIrregular, have.Pattern)
 }
 
-func TestBandLevelAndRate(t *testing.T) {
-	assert.Equal(t, 0, Band{}.Rate())
-	assert.Equal(t, 66, Band{Seen: 2, Total: 3}.Rate())
+func TestBandLevel(t *testing.T) {
 	assert.Equal(t, "none", Band{}.Level())
 	assert.Equal(t, "hi", Band{Seen: 4, Total: 5}.Level())
 	assert.Equal(t, "lo", Band{Seen: 1, Total: 5}.Level())

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ctx42/testing/pkg/assert"
 
@@ -235,7 +236,7 @@ func Test_HTTPProber_hostile_content_bounded(t *testing.T) {
 			assert.True(t, len(k) <= maxHeaderName)
 			for _, v := range vs {
 				assert.True(t, len(v) <= maxHeaderValue)
-				assert.True(t, validUTF8(v))
+				assert.True(t, utf8.ValidString(v))
 			}
 		}
 		assert.True(t, len(obs.Cookies) <= maxCookies)

@@ -1,7 +1,6 @@
 package scan
 
 import (
-	"net/netip"
 	"testing"
 
 	"github.com/ctx42/testing/pkg/assert"
@@ -14,25 +13,6 @@ func TestMeteredArgs(t *testing.T) {
 
 	want := []string{"-v", "-sn", "-n", "--max-rate", "300", "-oX", "/dev/fd/3", "10.20.0.0/24", "10.20.1.5"}
 	assert.Equal(t, want, got)
-}
-
-func TestTargetOperands(t *testing.T) {
-	t.Run("prefixes and hosts", func(t *testing.T) {
-		in := []string{"-sn", "-n", "-oX", "-", "10.20.0.0/24", "10.20.1.5"}
-
-		got := TargetOperands(in)
-
-		want := []netip.Prefix{netip.MustParsePrefix("10.20.0.0/24"), netip.MustParsePrefix("10.20.1.5/32")}
-		assert.Equal(t, want, got)
-	})
-
-	t.Run("exclude is not a target", func(t *testing.T) {
-		args := DiscoveryArgs(
-			[]netip.Prefix{netip.MustParsePrefix("10.20.0.0/24")}, Opts{},
-			[]netip.Addr{netip.MustParseAddr("10.20.0.1")})
-
-		assert.Len(t, 1, TargetOperands(args))
-	})
 }
 
 func TestParseRawPackets(t *testing.T) {

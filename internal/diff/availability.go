@@ -20,14 +20,6 @@ type Band struct {
 	Seen, Total int
 }
 
-// Rate returns Seen/Total in percent (floor), 0 for an empty band.
-func (b Band) Rate() int {
-	if b.Total == 0 {
-		return 0
-	}
-	return b.Seen * 100 / b.Total
-}
-
 // Level classifies the band for shading: none (no runs), hi (>= 80%),
 // lo (<= 20%) or mid.
 func (b Band) Level() string {

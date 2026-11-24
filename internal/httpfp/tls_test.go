@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ctx42/testing/pkg/assert"
 )
@@ -228,7 +229,7 @@ func Test_CertInfo_hostile_fields_bounded(t *testing.T) {
 
 	assert.True(t, len(info.SANs) <= maxSANs)
 	assert.True(t, len(info.Subject) <= maxCertField)
-	assert.True(t, validUTF8(info.Issuer))
+	assert.True(t, utf8.ValidString(info.Issuer))
 }
 
 func Test_HTTPProber_Probe_falls_back_to_legacy_TLS(t *testing.T) {

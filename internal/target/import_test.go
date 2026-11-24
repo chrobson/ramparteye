@@ -2,6 +2,7 @@ package target
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 func TestImportCSV(t *testing.T) {
 	in := "value,tags\n10.20.0.0/24,lab;Web\n# comment\n\napp.LAB,web\n10.20.0.5\n10.20.0.0/24,extra\n"
 
-	got, err := ImportCSV(strings.NewReader(in))
+	got, err := importCSV(strings.NewReader(in))
 
 	assert.NoError(t, err)
 	assert.Len(t, 3, got)
@@ -26,7 +27,7 @@ func TestImportCSV(t *testing.T) {
 func TestImportCSVTooBig(t *testing.T) {
 	in := bytes.Repeat([]byte("a"), MaxImportBytes+1)
 
-	_, err := ImportCSV(bytes.NewReader(in))
+	_, err := importCSV(bytes.NewReader(in))
 
 	assert.ErrorIs(t, ErrTooBig, err)
 }
@@ -34,14 +35,14 @@ func TestImportCSVTooBig(t *testing.T) {
 func TestImportCSVAtLimitIsNotTooBig(t *testing.T) {
 	in := "10.0.0.1\n" + strings.Repeat("#", MaxImportBytes-len("10.0.0.1\n"))
 
-	got, err := ImportCSV(strings.NewReader(in))
+	got, err := importCSV(strings.NewReader(in))
 
 	assert.NoError(t, err)
 	assert.Len(t, 1, got)
 }
 
 func TestImportCSVInvalidRowReportsLine(t *testing.T) {
-	_, err := ImportCSV(strings.NewReader("value,tags\n10.0.0.1\n10.0.0.300\n"))
+	_, err := importCSV(strings.NewReader("value,tags\n10.0.0.1\n10.0.0.300\n"))
 
 	assert.ErrorIs(t, ErrInvalidTarget, err)
 	assert.ErrorContain(t, "line 3", err)
@@ -53,7 +54,7 @@ func TestImportCSVTooManyEntries(t *testing.T) {
 		b.WriteString("10.0.0.1\n")
 	}
 
-	_, err := ImportCSV(strings.NewReader(b.String()))
+	_, err := importCSV(strings.NewReader(b.String()))
 
 	assert.ErrorIs(t, ErrTooManyEntries, err)
 }
@@ -61,7 +62,7 @@ func TestImportCSVTooManyEntries(t *testing.T) {
 func TestImportJSON(t *testing.T) {
 	in := `[{"value":"10.20.0.0/24","tags":["Lab"]},{"value":"app.lab","tags":"a;b"},{"value":"10.0.0.1-10.0.0.3"}]`
 
-	got, err := ImportJSON(strings.NewReader(in))
+	got, err := importJSON(strings.NewReader(in))
 
 	assert.NoError(t, err)
 	assert.Len(t, 3, got)
@@ -71,13 +72,13 @@ func TestImportJSON(t *testing.T) {
 }
 
 func TestImportJSONErrors(t *testing.T) {
-	_, err := ImportJSON(strings.NewReader(`{"value":"x"}`))
+	_, err := importJSON(strings.NewReader(`{"value":"x"}`))
 	assert.Error(t, err)
 
-	_, err = ImportJSON(strings.NewReader(`[{"value":"10.0.0.300"}]`))
+	_, err = importJSON(strings.NewReader(`[{"value":"10.0.0.300"}]`))
 	assert.ErrorIs(t, ErrInvalidTarget, err)
 
-	_, err = ImportJSON(bytes.NewReader(bytes.Repeat([]byte(" "), MaxImportBytes+1)))
+	_, err = importJSON(bytes.NewReader(bytes.Repeat([]byte(" "), MaxImportBytes+1)))
 	assert.ErrorIs(t, ErrTooBig, err)
 }
 
@@ -94,4 +95,14 @@ func TestImportLines(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, 2, ts)
 	assert.Equal(t, []int{2, 4}, lines)
+}
+
+func importCSV(r io.Reader) ([]model.Target, error) {
+	ts, _, err := ImportCSVLines(r)
+	return ts, err
+}
+
+func importJSON(r io.Reader) ([]model.Target, error) {
+	ts, _, err := ImportJSONLines(r)
+	return ts, err
 }

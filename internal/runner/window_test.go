@@ -39,7 +39,7 @@ func TestNextWindow(t *testing.T) {
 			from, to := NextWindow(c.now, c.start, c.end)
 			assert.Time(t, c.from, from)
 			assert.Time(t, c.to, to)
-			assert.Equal(t, c.in, InWindow(c.now, c.start, c.end))
+			assert.Equal(t, c.in, !c.now.Before(from) && c.now.Before(to))
 			assert.True(t, to.After(from))
 		})
 	}
