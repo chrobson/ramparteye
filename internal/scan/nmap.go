@@ -9,8 +9,10 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +23,10 @@ import (
 // ErrDNSEnabled is returned when an nmap command line lacks -n: name
 // resolution would let a scanned name rebind to an out-of-scope address.
 var ErrDNSEnabled = errors.New("nmap command line does not disable DNS (-n)")
+
+// ErrDisallowedArg is returned when an nmap command line contains an option
+// the builders never emit, or a malformed value for one that they do.
+var ErrDisallowedArg = errors.New("nmap command line has a disallowed argument")
 
 // Scanner discovers live hosts and their services. Implementations MUST
 // re-check every operand against the scope right before exec.
@@ -45,6 +51,7 @@ type Nmap struct {
 	scope   scope.Scope
 	exclude []netip.Addr
 	exec    ExecFunc // nil = run the real binary
+	limit   int64    // max nmap output bytes
 }
 
 var _ Scanner = (*Nmap)(nil)
@@ -56,7 +63,7 @@ func NewNmap(path string, s scope.Scope, exec ExecFunc) *Nmap {
 	if path == "" {
 		path = "nmap"
 	}
-	return &Nmap{path: path, scope: s, exclude: s.Excluded(), exec: exec}
+	return &Nmap{path: path, scope: s, exclude: s.Excluded(), exec: exec, limit: MaxOutputBytes}
 }
 
 // Discover runs phase 1 host discovery (-sn).
@@ -65,16 +72,19 @@ func (n *Nmap) Discover(ctx context.Context, prefixes []netip.Prefix, o Opts) (R
 	if len(prefixes) == 0 {
 		return out, nil
 	}
-	for _, p := range prefixes {
+	prefixes = slices.Clone(prefixes)
+	for i, p := range prefixes {
 		if err := n.scope.CheckPrefix(p); err != nil {
 			return Result{}, err
 		}
+		prefixes[i] = normPrefix(p)
 	}
 	// nmap cannot mix IPv4 and IPv6 targets in one invocation (-6).
 	for _, group := range splitPrefixesByFamily(prefixes) {
-		res, err := n.run(ctx, DiscoveryArgs(group, o, familyAddrs(n.exclude, group[0].Addr().Unmap().Is6())))
+		res, err := n.run(ctx, DiscoveryArgs(group, o, familyAddrs(n.exclude, group[0].Addr().Is6())))
+		out.Runs = append(out.Runs, res.Runs...)
 		if err != nil {
-			return Result{}, err
+			return out, err
 		}
 		for _, h := range res.Hosts {
 			if n.scope.Allows(h.IP) && inAny(h.IP, group) {
@@ -82,7 +92,6 @@ func (n *Nmap) Discover(ctx context.Context, prefixes []netip.Prefix, o Opts) (R
 			}
 		}
 		out.Stats.add(res.Stats)
-		out.Runs = append(out.Runs, res.Runs...)
 	}
 	sort.Slice(out.Hosts, func(i, j int) bool { return out.Hosts[i].IP.Less(out.Hosts[j].IP) })
 	return out, nil
@@ -112,7 +121,8 @@ func (n *Nmap) Services(ctx context.Context, hosts []netip.Addr, o Opts) (Result
 	for _, group := range splitAddrsByFamily(hosts) {
 		res, err := n.run(ctx, ServiceArgs(group, o))
 		if err != nil {
-			return Result{}, err
+			out.Runs = append(out.Runs, res.Runs...)
+			return out, err
 		}
 		var svcs []model.ServiceObs
 		seen := map[model.AssetKey]bool{}
@@ -130,7 +140,8 @@ func (n *Nmap) Services(ctx context.Context, hosts []netip.Addr, o Opts) (Result
 		if len(o.ExtraPorts) > 0 && len(o.Ports) == 0 {
 			extra, err := n.run(ctx, ExtraServiceArgs(group, o))
 			if err != nil {
-				return Result{}, err
+				out.Runs = append(out.Runs, extra.Runs...)
+				return out, err
 			}
 			take(extra)
 			out.merge(Result{Stats: extra.Stats, Runs: extra.Runs}, want)
@@ -139,7 +150,8 @@ func (n *Nmap) Services(ctx context.Context, hosts []netip.Addr, o Opts) (Result
 			if ports := DeepPorts(unknownPorts(svcs, group)); len(ports) > 0 {
 				deep, err := n.run(ctx, DeepServiceArgs(group, ports, o))
 				if err != nil {
-					return Result{}, err
+					out.Runs = append(out.Runs, deep.Runs...)
+					return out, err
 				}
 				named := map[model.AssetKey]model.ServiceObs{}
 				for _, s := range deep.Services {
@@ -183,77 +195,141 @@ func (s *Stats) add(o Stats) {
 	}
 }
 
-// run vets the operands of args, executes nmap and parses its report.
+// run builds the exact argv to execute, vets it and runs nmap. When nmap was
+// started the returned Result carries its Run even on error.
 func (n *Nmap) run(ctx context.Context, args []string) (Result, error) {
-	targets, err := n.vet(args)
+	argv := args
+	if n.exec == nil {
+		argv = MeteredArgs(args)
+	}
+	targets, err := n.vet(argv)
 	if err != nil {
 		return Result{}, err
 	}
 	start := time.Now()
+	r := Run{Argv: argv, Targets: targets, Start: start}
+	fail := func(err error) (Result, error) {
+		r.End = time.Now()
+		r.Elapsed = r.End.Sub(start)
+		return Result{Runs: []Run{r}}, err
+	}
 	var (
 		out  []byte
 		raw  int64
 		have bool
-		argv = args
 	)
 	if n.exec != nil {
-		out, err = n.exec(ctx, n.path, args)
+		out, err = n.exec(ctx, n.path, argv)
 	} else {
-		argv = MeteredArgs(args)
-		out, raw, have, err = runBinaryMetered(ctx, n.path, argv)
+		out, raw, have, err = runBinaryMetered(ctx, n.path, argv, n.limit)
 	}
 	if err != nil {
-		return Result{}, err
+		return fail(err)
 	}
-	res, err := Parse(bytes.NewReader(out))
+	res, err := parse(bytes.NewReader(out), n.limit)
 	if err != nil {
-		return res, err
+		return fail(err)
 	}
-	end := time.Now()
-	elapsed := time.Duration(res.Stats.Elapsed * float64(time.Second))
-	if elapsed <= 0 {
-		elapsed = end.Sub(start)
+	r.End = time.Now()
+	r.Elapsed = time.Duration(res.Stats.Elapsed * float64(time.Second))
+	if r.Elapsed <= 0 {
+		r.Elapsed = r.End.Sub(start)
 	}
-	res.Runs = []Run{{
-		Argv:    argv,
-		Targets: targets,
-		Packets: EstimatePackets(res.Stats, args, raw, have),
-		Raw:     have,
-		Elapsed: elapsed,
-		Start:   start,
-		End:     end,
-	}}
+	r.Packets, r.Raw = EstimatePackets(res.Stats, args, raw, have), have
+	res.Runs = []Run{r}
 	return res, nil
 }
 
-// vet is the last gate before exec. It re-parses every target operand from
-// the final argv and refuses (scope.ErrOutOfScope or scope.ErrNoScope) unless
-// each one is a literal IP address or prefix inside the scope. Host names,
-// zoned and IPv4-mapped addresses, options in operand position and anything
-// else are refused, so nmap can never resolve a name itself.
-func (n *Nmap) vet(args []string) ([]netip.Prefix, error) {
+var (
+	// builderFlags are the options without a value the builders emit.
+	builderFlags = map[string]bool{
+		"-sn": true, "-n": true, "-PE": true, "-sS": true, "-sT": true, "-Pn": true,
+		"-sV": true, "--version-light": true, "--open": true, "-6": true, "-v": true, "-p-": true,
+	}
+	portSpecRe = regexp.MustCompile(`^[0-9]+([,-][0-9]+)*$`)
+)
+
+// vet is the last gate before exec. It walks the WHOLE argv (nmap permutes
+// arguments, so position proves nothing) against the options the builders
+// emit. Unknown options are refused (ErrDisallowedArg); every other token is
+// a target operand and must be a literal IP address or prefix inside the
+// scope (scope.ErrOutOfScope), so nmap can never resolve a name itself or
+// read targets from a file. A prefix containing an excluded address must be
+// accompanied by that address in --exclude. DNS must be off (-n as a flag).
+func (n *Nmap) vet(argv []string) ([]netip.Prefix, error) {
 	if n.scope.Empty() {
 		return nil, scope.ErrNoScope
 	}
-	if !slices.Contains(args, "-n") {
-		return nil, ErrDNSEnabled
+	var (
+		ops          []string
+		excl         []netip.Addr
+		sawN, sawOut bool
+	)
+	for i := 0; i < len(argv); i++ {
+		a := argv[i]
+		switch {
+		case !strings.HasPrefix(a, "-"):
+			ops = append(ops, a)
+		case builderFlags[a]:
+			sawN = sawN || a == "-n"
+		case strings.HasPrefix(a, "-PS") || strings.HasPrefix(a, "-PA"):
+			if !portSpecRe.MatchString(a[3:]) {
+				return nil, fmt.Errorf("%w: %q", ErrDisallowedArg, a)
+			}
+		default:
+			if i+1 >= len(argv) {
+				return nil, fmt.Errorf("%w: %q", ErrDisallowedArg, a)
+			}
+			i++
+			v := argv[i]
+			switch a {
+			case "--max-rate", "--top-ports", "--version-intensity":
+				if x, err := strconv.Atoi(v); err != nil || x <= 0 {
+					return nil, fmt.Errorf("%w: %s %q", ErrDisallowedArg, a, v)
+				}
+			case "-p":
+				if !portSpecRe.MatchString(v) {
+					return nil, fmt.Errorf("%w: -p %q", ErrDisallowedArg, v)
+				}
+			case "--exclude":
+				for _, e := range strings.Split(v, ",") {
+					ip, err := netip.ParseAddr(e)
+					if err != nil || ip.Zone() != "" || ip.Is4In6() {
+						return nil, fmt.Errorf("%w: --exclude %q", ErrDisallowedArg, e)
+					}
+					excl = append(excl, ip)
+				}
+			case "-oX":
+				if v != "-" && v != "/dev/fd/3" {
+					return nil, fmt.Errorf("%w: -oX %q", ErrDisallowedArg, v)
+				}
+				sawOut = true
+			default:
+				return nil, fmt.Errorf("%w: %q", ErrDisallowedArg, a)
+			}
+		}
 	}
-	ops := operandArgs(args)
 	if len(ops) == 0 {
-		return nil, fmt.Errorf("%w: no target operands after -oX -", scope.ErrOutOfScope)
+		return nil, fmt.Errorf("%w: no target operands", scope.ErrOutOfScope)
 	}
 	targets := make([]netip.Prefix, 0, len(ops))
 	for _, op := range ops {
-		p, err := n.vetOperand(op)
+		p, err := n.vetOperand(op, excl)
 		if err != nil {
 			return nil, err
 		}
 		targets = append(targets, p)
 	}
+	if !sawN {
+		return nil, ErrDNSEnabled
+	}
+	if !sawOut {
+		return nil, fmt.Errorf("%w: no -oX output", ErrDisallowedArg)
+	}
 	return targets, nil
 }
 
-func (n *Nmap) vetOperand(op string) (netip.Prefix, error) {
+func (n *Nmap) vetOperand(op string, excl []netip.Addr) (netip.Prefix, error) {
 	if ip, err := netip.ParseAddr(op); err == nil {
 		if ip.Zone() != "" || ip.Is4In6() {
 			return netip.Prefix{}, fmt.Errorf("%w: %q is not a plain IP address", scope.ErrOutOfScope, op)
@@ -270,9 +346,24 @@ func (n *Nmap) vetOperand(op string) (netip.Prefix, error) {
 		if err := n.scope.CheckPrefix(p); err != nil {
 			return netip.Prefix{}, err
 		}
+		for _, e := range n.exclude {
+			if p.Contains(e) && !slices.Contains(excl, e) {
+				return netip.Prefix{}, fmt.Errorf("%w: %s contains excluded %s not passed via --exclude",
+					scope.ErrOutOfScope, p, e)
+			}
+		}
 		return p.Masked(), nil
 	}
 	return netip.Prefix{}, fmt.Errorf("%w: %q is not a literal IP address or prefix", scope.ErrOutOfScope, op)
+}
+
+// normPrefix unmaps IPv4-mapped prefixes (::ffff:a.b.c.d/96+n) and masks.
+func normPrefix(p netip.Prefix) netip.Prefix {
+	a, bits := p.Addr().WithZone(""), p.Bits()
+	if a.Is4In6() && bits >= 96 {
+		a, bits = a.Unmap(), bits-96
+	}
+	return netip.PrefixFrom(a, bits).Masked()
 }
 
 func (n *Nmap) filterExcluded(hosts []netip.Addr) []netip.Addr {
@@ -375,7 +466,7 @@ func inAny(ip netip.Addr, ps []netip.Prefix) bool {
 // the end of stdout is searched for nmap's "Raw packets sent: N" line. A
 // cancelled or expired context kills the process and the context error is
 // returned so callers can tell an interruption from a scan failure.
-func runBinaryMetered(ctx context.Context, path string, args []string) ([]byte, int64, bool, error) {
+func runBinaryMetered(ctx context.Context, path string, args []string, limit int64) ([]byte, int64, bool, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, 0, false, fmt.Errorf("nmap: pipe: %w", err)
@@ -401,8 +492,8 @@ func runBinaryMetered(ctx context.Context, path string, args []string) ([]byte, 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = io.Copy(&xmlBuf, io.LimitReader(pr, maxOutput+1))
-		if int64(xmlBuf.Len()) > maxOutput {
+		_, _ = io.Copy(&xmlBuf, io.LimitReader(pr, limit+1))
+		if int64(xmlBuf.Len()) > limit {
 			overflow = true
 			cancel()
 		}

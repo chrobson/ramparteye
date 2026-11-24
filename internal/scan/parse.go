@@ -21,9 +21,6 @@ const (
 	MaxFieldBytes = 512
 )
 
-// maxOutput is the effective cap; a variable only so tests can lower it.
-var maxOutput int64 = MaxOutputBytes
-
 // ErrOutputTooLarge is returned when nmap output exceeds MaxOutputBytes.
 var ErrOutputTooLarge = errors.New("nmap output exceeds the size limit")
 
@@ -130,9 +127,12 @@ type xmlPort struct {
 //
 // At most MaxOutputBytes are read and text taken from scanned hosts is
 // clipped to MaxFieldBytes, so hostile hosts cannot blow up memory.
-func Parse(r io.Reader) (Result, error) {
+func Parse(r io.Reader) (Result, error) { return parse(r, MaxOutputBytes) }
+
+// parse is Parse with an injectable output limit.
+func parse(r io.Reader, limit int64) (Result, error) {
 	var run nmapRun
-	lr := &io.LimitedReader{R: r, N: maxOutput + 1}
+	lr := &io.LimitedReader{R: r, N: limit + 1}
 	dec := xml.NewDecoder(lr)
 	// nmap XML is UTF-8 but older versions may declare other charsets.
 	dec.CharsetReader = func(_ string, in io.Reader) (io.Reader, error) { return in, nil }
@@ -176,7 +176,11 @@ func Parse(r io.Reader) (Result, error) {
 			if p.State.State != "open" || p.PortID <= 0 || p.PortID > 65535 {
 				continue
 			}
-			key := model.AssetKey{IP: ip, Port: uint16(p.PortID), Proto: strings.ToLower(p.Protocol)}
+			proto := strings.ToLower(p.Protocol)
+			if proto != "tcp" && proto != "udp" && proto != "sctp" {
+				continue
+			}
+			key := model.AssetKey{IP: ip, Port: uint16(p.PortID), Proto: proto}
 			if seenSvc[key] {
 				continue
 			}

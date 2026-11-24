@@ -143,14 +143,13 @@ func (r *endlessReader) Read(p []byte) (int, error) {
 }
 
 func TestParseCapsOutputSize(t *testing.T) {
-	maxOutput = 1 << 20
-	defer func() { maxOutput = MaxOutputBytes }()
+	const limit = 1 << 20
 	r := &endlessReader{head: `<?xml version="1.0"?><nmaprun>`}
 
-	_, err := Parse(r)
+	_, err := parse(r, limit)
 
-	assert.Error(t, err)
-	assert.True(t, r.n <= maxOutput+64*1024, "read %d bytes", r.n)
+	assert.ErrorIs(t, ErrOutputTooLarge, err)
+	assert.True(t, r.n <= limit+64*1024, "read %d bytes", r.n)
 }
 
 func TestParseHostileContent(t *testing.T) {
@@ -195,4 +194,18 @@ func TestParseMalformedDoesNotPanic(t *testing.T) {
 			_, _ = Parse(strings.NewReader(d))
 		}()
 	}
+}
+
+func TestParseSkipsUnknownProtocols(t *testing.T) {
+	doc := `<nmaprun><host><status state="up"/><address addr="10.0.0.1" addrtype="ipv4"/><ports>` +
+		`<port protocol="TCP" portid="22"><state state="open"/></port>` +
+		`<port protocol="ip" portid="1"><state state="open"/></port>` +
+		`<port protocol="<x>" portid="2"><state state="open"/></port>` +
+		`</ports></host></nmaprun>`
+
+	res, err := Parse(strings.NewReader(strings.Replace(doc, "<x>", "&lt;x&gt;", 1)))
+
+	assert.NoError(t, err)
+	assert.Len(t, 1, res.Services)
+	assert.Equal(t, "tcp", res.Services[0].Key.Proto)
 }
