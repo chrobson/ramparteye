@@ -64,18 +64,8 @@ You need Docker with Compose 2.24 or later.
 curl -fsSL https://raw.githubusercontent.com/chrobson/ramparteye/main/install.sh | sh -s -- --demo
 ```
 
-> **Until the first public release** the GHCR image is not published yet, so the line above
-> does not work. Build the image from a checkout and install from it instead:
->
-> ```sh
-> git clone https://github.com/chrobson/ramparteye && cd ramparteye
-> make image                                      # builds ramparteye:dev
-> RAMPART_INSTALL_LOCAL_IMAGE=ramparteye:dev ./install.sh --demo
-> ```
->
-> The same works for a real scope (`--scope ...` instead of `--demo`). The install then lives in
-> `./ramparteye` inside the checkout; to change the lab, stay in the checkout and run
-> `set -a && . ramparteye/.env && set +a && lab/change.sh run2`.
+> To install from a checkout instead (for example to try local changes): `make image`, then
+> `RAMPART_INSTALL_LOCAL_IMAGE=ramparteye:dev ./install.sh --demo`.
 
 Open <http://localhost:9080>, sign in with one of the four demo accounts printed at the end
 (admin, operator, analyst, viewer), open **Configure → Scan profiles** and press **Run now** on

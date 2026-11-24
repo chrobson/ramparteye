@@ -35,4 +35,4 @@ reach an internal URL), and attacks that need root on the Docker host.
 
 ## Supported versions
 
-Only the latest release (and `main` until the first release) receives security fixes.
+Only the latest release receives security fixes.

@@ -8,7 +8,6 @@ current release.
 
 - Pin container base images and GitHub Actions to digests at release time (today they are pinned
   to version tags).
-- First public release: GHCR image and binaries from the release workflow.
 
 ## Not in the current release (non-goals for now)
 
