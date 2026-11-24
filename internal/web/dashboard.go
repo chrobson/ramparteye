@@ -484,7 +484,7 @@ func setFlash(w http.ResponseWriter, r *http.Request, msg string) {
 		msg = msg[:maxFlash]
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: url.QueryEscape(msg), Path: "/",
-		MaxAge: 60, HttpOnly: true, Secure: isTLS(r), SameSite: http.SameSiteLaxMode})
+		MaxAge: 60, HttpOnly: true, Secure: auth.IsTLS(r), SameSite: http.SameSiteLaxMode})
 }
 
 // takeFlash returns and clears the flash message.
@@ -494,16 +494,10 @@ func takeFlash(w http.ResponseWriter, r *http.Request) string {
 		return ""
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: isTLS(r), SameSite: http.SameSiteLaxMode})
+		HttpOnly: true, Secure: auth.IsTLS(r), SameSite: http.SameSiteLaxMode})
 	msg, err := url.QueryUnescape(c.Value)
 	if err != nil || len(msg) > maxFlash {
 		return ""
 	}
 	return strings.ToValidUTF8(msg, "�")
-}
-
-// isTLS reports whether the client reached us over TLS (directly or via a
-// proxy that says so), as the session cookie logic does.
-func isTLS(r *http.Request) bool {
-	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

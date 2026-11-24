@@ -176,7 +176,9 @@ func (a *Authenticator) Logout(ctx context.Context, r *http.Request) error {
 	return a.Sessions.DeleteSession(ctx, HashToken(c.Value))
 }
 
-func isTLS(r *http.Request) bool {
+// IsTLS reports whether the client reached us over TLS, directly or via a
+// proxy that says so with X-Forwarded-Proto.
+func IsTLS(r *http.Request) bool {
 	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
@@ -186,7 +188,7 @@ func SetSessionCookie(w http.ResponseWriter, r *http.Request, tok string, expire
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Value: tok, Path: "/", Expires: expires,
 		MaxAge:   int(expires.Sub(now).Seconds()),
-		HttpOnly: true, Secure: isTLS(r), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: IsTLS(r), SameSite: http.SameSiteLaxMode,
 	})
 }
 
@@ -194,7 +196,7 @@ func SetSessionCookie(w http.ResponseWriter, r *http.Request, tok string, expire
 func ClearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name: CookieName, Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: isTLS(r), SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, Secure: IsTLS(r), SameSite: http.SameSiteLaxMode,
 	})
 }
 
