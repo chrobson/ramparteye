@@ -88,3 +88,14 @@ func TestDojoPushes(t *testing.T) {
 	assert.NotZero(t, p.At)
 	assert.Len(t, 1, must.Value(s.DojoPushes(ctx, 1)))
 }
+
+func TestDojoConfigMissingRow(t *testing.T) {
+	s, pool := newStore(t)
+	must.Value(pool.Exec(ctx, `DELETE FROM dojo_config`))
+
+	_, err := s.DojoConfig(ctx)
+	assert.ErrorIs(t, store.ErrNotFound, err)
+
+	err = s.SaveDojoConfig(ctx, store.DojoConfig{URL: "https://dojo.example"})
+	assert.ErrorIs(t, store.ErrNotFound, err)
+}

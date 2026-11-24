@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -46,18 +47,24 @@ func (s *Store) DojoConfig(ctx context.Context) (DojoConfig, error) {
 		close_missing, managed_by_env, updated_at FROM dojo_config`).
 		Scan(&c.URL, &c.TokenEnc, &c.ProductType, &c.Product, &c.Engagement, &c.AutoPush,
 			&c.CloseMissing, &c.ManagedByEnv, &c.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return DojoConfig{}, fmt.Errorf("DefectDojo config row: %w", ErrNotFound)
+	}
 	return c, err
 }
 
 // SaveDojoConfig replaces the DefectDojo configuration. A nil TokenEnc keeps
 // the stored token. Errors never carry the token.
 func (s *Store) SaveDojoConfig(ctx context.Context, c DojoConfig) error {
-	_, err := s.db.Exec(ctx, `UPDATE dojo_config SET url = $1, token_enc = coalesce($2, token_enc),
+	tag, err := s.db.Exec(ctx, `UPDATE dojo_config SET url = $1, token_enc = coalesce($2, token_enc),
 		product_type = $3, product = $4, engagement = $5, auto_push = $6, close_missing = $7,
 		managed_by_env = $8, updated_at = now()`,
 		c.URL, c.TokenEnc, c.ProductType, c.Product, c.Engagement, c.AutoPush, c.CloseMissing, c.ManagedByEnv)
 	if err != nil {
 		return fmt.Errorf("save DefectDojo config: %w", sanitize(err))
+	}
+	if tag.RowsAffected() != 1 {
+		return fmt.Errorf("save DefectDojo config row: %w", ErrNotFound)
 	}
 	return nil
 }
