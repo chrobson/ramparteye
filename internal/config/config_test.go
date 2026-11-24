@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,17 +48,23 @@ func TestLoadNoDefaultScope(t *testing.T) {
 
 func TestLoadValues(t *testing.T) {
 	cfg, err := Load(envMap(map[string]string{
-		"RAMPART_ALLOWED_CIDRS":   "10.0.0.0/24, 192.0.2.7",
-		"RAMPART_SCAN_EXCLUDE":    "10.0.0.1",
-		"RAMPART_SCAN_PORTS":      "22,80",
-		"RAMPART_ALLOW_HOSTS":     "a.example, b.example",
-		"RAMPART_MAX_RATE":        "100",
-		"RAMPART_SCAN_PRIVILEGED": "true",
-		"RAMPART_DEMO":            "1",
-		"RAMPART_HTTP_RETRIES":    "0",
-		"RAMPART_HTTP_TIMEOUT":    "3s",
-		"RAMPART_DOJO_PRODUCT":    "Edge",
-		"RAMPART_SECRET_KEY":      "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+		"RAMPART_ALLOWED_CIDRS":         "10.0.0.0/24, 192.0.2.7",
+		"RAMPART_SCAN_EXCLUDE":          "10.0.0.1",
+		"RAMPART_SCAN_PORTS":            "22,80",
+		"RAMPART_ALLOW_HOSTS":           "a.example, b.example",
+		"RAMPART_MAX_RATE":              "100",
+		"RAMPART_SCAN_PRIVILEGED":       "true",
+		"RAMPART_DEMO":                  "1",
+		"RAMPART_HTTP_RETRIES":          "0",
+		"RAMPART_HTTP_TIMEOUT":          "3s",
+		"RAMPART_DOJO_PRODUCT":          "Edge",
+		"RAMPART_UNSTABLE_WINDOW":       "8",
+		"RAMPART_UNSTABLE_IF_FLIPS":     "4",
+		"RAMPART_INACTIVE_AFTER_MISSES": "6",
+		"RAMPART_ALL_PORTS_MAX_ADDRS":   "0",
+		"RAMPART_DOJO_PRODUCT_TYPE":     "PT",
+		"RAMPART_DOJO_ENGAGEMENT":       "Eng",
+		"RAMPART_SECRET_KEY":            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
 	}))
 
 	assert.NoError(t, err)
@@ -73,6 +80,10 @@ func TestLoadValues(t *testing.T) {
 	assert.Equal(t, 0, cfg.HTTPRetries)
 	assert.Equal(t, 3*time.Second, cfg.HTTPTimeout)
 	assert.Equal(t, "Edge", cfg.DojoProduct)
+	assert.Equal(t, UnstableConfig{InactiveAfterMisses: 6, UnstableIfFlips: 4, Window: 8}, cfg.Unstable)
+	assert.Equal(t, 0, cfg.AllPortsMaxAddrs)
+	assert.Equal(t, "PT", cfg.DojoProductType)
+	assert.Equal(t, "Eng", cfg.DojoEngagement)
 	assert.Len(t, 32, cfg.SecretKey)
 	assert.Equal(t, byte(0xff), cfg.SecretKey[31])
 }
@@ -85,15 +96,19 @@ func TestLoadInvalidCIDR(t *testing.T) {
 
 func TestLoadInvalidValues(t *testing.T) {
 	tests := map[string]string{
-		"RAMPART_MAX_RATE":        "0",
-		"RAMPART_SCAN_PORTS":      "70000",
-		"RAMPART_SCAN_EXCLUDE":    "nope",
-		"RAMPART_HTTP_RETRIES":    "4",
-		"RAMPART_HTTP_TIMEOUT":    "0s",
-		"RAMPART_SECRET_KEY":      "abcd",
-		"RAMPART_SCAN_PRIVILEGED": "maybe",
-		"RAMPART_DEMO":            "maybe",
-		"RAMPART_TICK_EVERY":      "soon",
+		"RAMPART_MAX_RATE":              "0",
+		"RAMPART_SCAN_PORTS":            "70000",
+		"RAMPART_SCAN_EXCLUDE":          "nope",
+		"RAMPART_HTTP_RETRIES":          "4",
+		"RAMPART_HTTP_TIMEOUT":          "0s",
+		"RAMPART_SECRET_KEY":            "abcd",
+		"RAMPART_SCAN_PRIVILEGED":       "maybe",
+		"RAMPART_DEMO":                  "maybe",
+		"RAMPART_TICK_EVERY":            "soon",
+		"RAMPART_UNSTABLE_WINDOW":       "0",
+		"RAMPART_UNSTABLE_IF_FLIPS":     "-1",
+		"RAMPART_INACTIVE_AFTER_MISSES": "0",
+		"RAMPART_ALL_PORTS_MAX_ADDRS":   "-1",
 	}
 	for key, val := range tests {
 		t.Run(key, func(t *testing.T) {
@@ -191,4 +206,27 @@ func TestParseAddrs(t *testing.T) {
 
 	_, err = ParseAddrs("10.0.0.256")
 	assert.Error(t, err)
+}
+
+func TestLoadWindowSmallerThanFlips(t *testing.T) {
+	_, err := Load(envMap(map[string]string{
+		"RAMPART_UNSTABLE_WINDOW": "1", "RAMPART_UNSTABLE_IF_FLIPS": "2",
+	}))
+
+	assert.ErrorContain(t, "RAMPART_UNSTABLE_WINDOW", err)
+}
+
+func TestLoadSecretKeyErrorDoesNotLeak(t *testing.T) {
+	bad := "zz" + "00112233445566778899aabbccddeeff00112233445566778899aabbccddee"
+	_, err := Load(envMap(map[string]string{"RAMPART_SECRET_KEY": bad}))
+
+	assert.ErrorContain(t, "must be 64 hex characters", err)
+	assert.False(t, strings.Contains(err.Error(), "zz"))
+}
+
+func TestParseAddrsDropsZone(t *testing.T) {
+	got, err := ParseAddrs("fe80::1%eth0")
+
+	assert.NoError(t, err)
+	assert.Equal(t, []netip.Addr{netip.MustParseAddr("fe80::1")}, got)
 }

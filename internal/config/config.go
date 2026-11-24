@@ -166,6 +166,21 @@ func Load(env func(string) string) (Config, error) {
 	if c.Unstable.Window, err = num("RAMPART_UNSTABLE_WINDOW", 5); err != nil {
 		return c, err
 	}
+	if c.Unstable.InactiveAfterMisses < 1 {
+		return c, fmt.Errorf("RAMPART_INACTIVE_AFTER_MISSES must be at least 1")
+	}
+	if c.Unstable.UnstableIfFlips < 1 {
+		return c, fmt.Errorf("RAMPART_UNSTABLE_IF_FLIPS must be at least 1")
+	}
+	if c.Unstable.Window < 1 {
+		return c, fmt.Errorf("RAMPART_UNSTABLE_WINDOW must be at least 1")
+	}
+	if c.Unstable.Window < c.Unstable.UnstableIfFlips {
+		return c, fmt.Errorf("RAMPART_UNSTABLE_WINDOW must be at least RAMPART_UNSTABLE_IF_FLIPS")
+	}
+	if c.AllPortsMaxAddrs < 0 {
+		return c, fmt.Errorf("RAMPART_ALL_PORTS_MAX_ADDRS must not be negative")
+	}
 	if c.TickEvery, err = dur("RAMPART_TICK_EVERY", "1m"); err != nil {
 		return c, err
 	}
@@ -304,14 +319,18 @@ func ParseAddrs(s string) ([]netip.Addr, error) {
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, a.Unmap())
+		out = append(out, a.Unmap().WithZone(""))
 	}
 	return out, nil
 }
 
 func parseHexKey(s string) ([]byte, error) {
 	if len(s) != 64 {
-		return nil, fmt.Errorf("want 64 hex chars (32 bytes), got %d", len(s))
+		return nil, fmt.Errorf("must be 64 hex characters (32 bytes)")
 	}
-	return hex.DecodeString(s)
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("must be 64 hex characters")
+	}
+	return b, nil
 }
