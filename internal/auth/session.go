@@ -147,7 +147,8 @@ func (a *Authenticator) verify(ctx context.Context, login, password, ip string) 
 		a.throttle.release(res, false)
 		return store.User{}, reservation{}, err
 	}
-	if !a.check(u.PasswordHash, password) {
+	// A disabled account fails like a wrong password, after the same work.
+	if !a.check(u.PasswordHash, password) || u.Disabled {
 		return store.User{}, reservation{}, ErrBadCredentials
 	}
 	return u, res, nil

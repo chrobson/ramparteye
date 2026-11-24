@@ -1,0 +1,59 @@
+{{define "title"}}Settings · Users & roles{{end}}
+{{define "content"}}{{$d := .Data}}{{template "settings-tabs" $d.Tabs}}
+{{with $d.Error}}<p role="alert" class="alert-error mb-3">{{.}}</p>{{end}}
+{{if $d.Password}}<section class="panel mb-3" role="status" aria-label="New password">
+{{template "panel-title" "Password shown once"}}
+<p>User <b>{{$d.Created}}</b> created. Their password, shown only now:</p>
+<p class="mt-2"><code class="select-all rounded bg-field px-2 py-1 font-mono text-base" data-password="{{$d.Password}}">{{$d.Password}}</code></p>
+<p class="mt-2 text-xs text-muted">Hand it over securely. They must choose a new password at the first sign-in.</p>
+</section>{{end}}
+
+<section class="panel" aria-label="Users">
+{{template "panel-title" "Users"}}
+<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Login</th><th>Role</th><th>Status</th><th>Created</th><th></th></tr></thead>
+<tbody>{{range $d.Users}}<tr>
+<td class="font-mono">{{template "cell" (dict "Value" .Login "Max" 40)}}{{if .Self}} <span class="text-dim">(you)</span>{{end}}</td>
+<td>{{if .Self}}{{.RoleName}}{{else}}<form method="post" action="/settings/users/{{.ID}}/role" class="flex gap-1">
+<select name="role" class="input max-w-[12rem]" aria-label="Role of {{.Login}}">{{$cur := .RoleName}}{{range $d.Roles}}<option value="{{.Name}}"{{if eq .Name $cur}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+<button type="submit" class="btn btn-sm">Change</button></form>{{end}}</td>
+<td>{{if .Disabled}}<span class="tag tag-gone">disabled</span>{{else}}<span class="tag tag-up">active</span>{{end}}{{if .MustChangePassword}}<span class="tag tag-flap">must change password</span>{{end}}</td>
+<td class="whitespace-nowrap text-dim">{{if not .CreatedAt.IsZero}}{{.CreatedAt.Format "2006-01-02"}}{{end}}</td>
+<td>{{if not .Self}}{{if .Disabled}}<form method="post" action="/settings/users/{{.ID}}/enable"><button type="submit" class="btn btn-sm">Enable</button></form>
+{{else}}<form method="post" action="/settings/users/{{.ID}}/disable" data-confirm="Disable {{.Login}}? They are signed out and cannot sign in until enabled again." data-confirm-ok="Disable"><button type="submit" class="btn btn-sm">Disable</button></form>{{end}}{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+</section>
+
+<div class="mt-3 grid gap-3 lg:grid-cols-2">
+<form method="post" action="/settings/users" class="panel grid content-start gap-2" autocomplete="off">
+{{template "panel-title" "Add a user"}}
+<label><span class="lbl">Login</span><input name="login" class="input" value="{{$d.Login}}" required maxlength="64"></label>
+<label><span class="lbl">Role</span><select name="role" class="input">{{range $d.Roles}}<option value="{{.Name}}"{{if eq .Name $d.Role}} selected{{end}}>{{.Name}}</option>{{end}}</select></label>
+<label><span class="lbl">Password (8–72 bytes; leave empty to generate one)</span><input name="password" type="password" class="input" autocomplete="new-password"></label>
+<p class="text-xs text-muted">The user must change the password at the first sign-in.</p>
+<div><button type="submit" class="btn btn-primary">Add user</button></div>
+</form>
+
+<form method="post" action="/settings/roles" class="panel grid content-start gap-2">
+{{template "panel-title" "New custom role"}}
+<label><span class="lbl">Name</span><input name="name" class="input" value="{{$d.RoleName}}" required maxlength="64"></label>
+<fieldset><legend class="lbl mb-1">Permissions</legend>
+<div class="grid gap-1 sm:grid-cols-2">{{range $d.Perms}}<label class="flex items-center gap-2 font-mono text-xs"><input type="checkbox" name="perm" value="{{.}}"{{if hasPerm $d.RolePerms .}} checked{{end}}>{{.}}</label>{{end}}</div>
+</fieldset>
+<p class="text-xs text-muted">settings.admin stays with the built-in Admin role.</p>
+<div><button type="submit" class="btn">Create role</button></div>
+</form>
+</div>
+
+<section class="panel mt-3" aria-label="Roles">
+{{template "panel-title" "Roles"}}
+<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Role</th><th>Permissions</th><th>Users</th><th></th></tr></thead>
+<tbody>{{range $d.Roles}}<tr>
+<td>{{.Name}}{{if .Builtin}} <span class="text-dim">built-in</span>{{end}}</td>
+<td class="font-mono text-xs">{{range $i, $p := .Perms}}{{if $i}}, {{end}}{{$p}}{{end}}</td>
+<td class="font-mono">{{.Users}}</td>
+<td>{{if not .Builtin}}<form method="post" action="/settings/roles/{{.ID}}/delete" data-confirm="Delete role {{.Name}}?" data-confirm-ok="Delete"><button type="submit" class="btn btn-sm">Delete</button></form>{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+</section>
+{{end}}

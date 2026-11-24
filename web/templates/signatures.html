@@ -1,0 +1,21 @@
+{{define "title"}}Signatures{{end}}
+{{define "content"}}{{$d := .Data}}{{$w := can .Ctx "signatures.write"}}
+<div class="flex flex-wrap items-end justify-between gap-2">
+<div><h1 class="page-title">Signatures</h1>
+<p class="text-muted">{{len $d.Rows}} signatures · {{$d.Enabled}} enabled · {{$d.Builtin}} built-in, {{$d.Custom}} custom, {{$d.Nuclei}} from nuclei. Signatures read what the scan observed and send at most a few GET/HEAD requests.</p></div>
+{{if $w}}<div class="flex gap-2"><a class="btn btn-primary" href="/signatures/new">New signature</a>{{if can .Ctx "settings.admin"}}<a class="btn" href="/signatures/import">Import nuclei templates</a>{{end}}</div>{{end}}
+</div>
+<section class="panel mt-4" aria-label="Signatures">
+{{if $d.Rows}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Signature</th><th>Source</th><th>Category</th><th>Matchers</th><th>Status</th>{{if $w}}<th></th>{{end}}</tr></thead>
+<tbody>{{range $d.Rows}}<tr>
+<td><a href="/signatures/{{.ID}}" class="font-semibold">{{template "cell" (dict "Value" .Name "Max" 60)}}</a><div class="font-mono text-xs text-dim">{{.ID}}</div></td>
+<td>{{if .IsBuiltin}}built-in{{else}}{{.Source}}{{end}}{{if .PathProbe}}<span class="tag tag-flap" title="Sends extra GET/HEAD requests; counts against the per-host request budget">path probe</span>{{end}}</td>
+<td>{{if .Invalid}}<span class="text-bad" title="{{.Invalid}}">invalid</span>{{else}}{{.Category}} <span class="text-dim">· {{.Confidence}}%</span>{{with .Severity}} <span class="text-dim">· {{.}}</span>{{end}}{{end}}</td>
+<td class="font-mono text-xs">{{range $i, $t := .Types}}{{if $i}}, {{end}}{{$t}}{{end}}</td>
+<td>{{if .Enabled}}<span class="tag tag-up">enabled</span>{{else}}<span class="tag tag-changed">disabled</span>{{end}}</td>
+{{if $w}}<td><form method="post" action="/signatures/{{.ID}}/toggle"><button type="submit" class="btn btn-sm">{{if .Enabled}}Disable{{else}}Enable{{end}}</button></form></td>{{end}}
+</tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No signatures" "Text" "Built-in signatures are loaded when the scanner starts.")}}{{end}}
+</section>
+{{end}}

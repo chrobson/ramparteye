@@ -33,7 +33,9 @@ type User struct {
 	RoleName           string
 	Perms              []string
 	MustChangePassword bool
-	CreatedAt          time.Time
+	// Disabled accounts cannot log in and their sessions are ignored.
+	Disabled  bool
+	CreatedAt time.Time
 }
 
 // Role is a role with its permissions and number of assigned users.
@@ -47,12 +49,12 @@ type Role struct {
 
 const userCols = `u.id, u.login, u.pass_hash, u.role_id, r.name,
 	coalesce((SELECT array_agg(rp.perm ORDER BY rp.perm) FROM role_permissions rp WHERE rp.role_id = u.role_id), '{}'),
-	u.must_change_password, u.created_at`
+	u.must_change_password, u.disabled, u.created_at`
 
 func scanUser(row pgx.Row) (User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.Login, &u.PasswordHash, &u.RoleID, &u.RoleName, &u.Perms,
-		&u.MustChangePassword, &u.CreatedAt)
+		&u.MustChangePassword, &u.Disabled, &u.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrUserNotFound
 	}
@@ -145,6 +147,19 @@ func (s *Store) SetUserRole(ctx context.Context, userID, roleID int64) error {
 	if pgCode(err) == codeForeignKeyViolation {
 		return ErrRoleNotFound
 	}
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
+// SetUserDisabled disables or re-enables an account. Sessions of a
+// disabled account stop working at once (SessionUserAt skips them).
+func (s *Store) SetUserDisabled(ctx context.Context, userID int64, disabled bool) error {
+	tag, err := s.db.Exec(ctx, `UPDATE users SET disabled = $2 WHERE id = $1`, userID, disabled)
 	if err != nil {
 		return err
 	}

@@ -1,0 +1,23 @@
+{{define "title"}}Import nuclei templates{{end}}
+{{define "content"}}{{$d := .Data}}
+<p class="text-xs text-muted"><a href="/signatures">Signatures</a> /</p>
+<h1 class="page-title">Import nuclei templates</h1>
+<p class="mt-1 max-w-prose text-muted">Only passive templates are accepted: one HTTP GET or HEAD request, no payloads, fuzzing, request bodies, out-of-band interaction or DSL. Imported templates become signatures that stay <b>disabled</b> until you review and enable them one by one.</p>
+{{with $d.Error}}<p role="alert" class="alert-error mt-4">{{.}}</p>{{end}}
+{{if $d.Report}}<section class="panel mt-4" role="status" aria-label="Import report">
+{{template "panel-title" "Import report"}}
+<p><b>{{len $d.Imported}} imported (disabled)</b> · {{len $d.Rejected}} rejected</p>
+{{if $d.Imported}}<h3 class="lbl mt-3">Imported</h3>
+<div class="overflow-x-auto"><table class="tbl"><thead><tr><th>File</th><th>Signature</th></tr></thead>
+<tbody>{{range $d.Imported}}<tr><td class="font-mono">{{template "cell" (dict "Value" .File "Max" 60)}}</td><td><a href="/signatures/{{.ID}}">{{template "cell" (dict "Value" .Name "Max" 60)}}</a> <span class="font-mono text-xs text-dim">{{.ID}}</span></td></tr>{{end}}</tbody></table></div>{{end}}
+{{if $d.Rejected}}<h3 class="lbl mt-3">Rejected</h3>
+<div class="overflow-x-auto"><table class="tbl"><thead><tr><th>File</th><th>Reason</th></tr></thead>
+<tbody>{{range $d.Rejected}}<tr><td class="font-mono">{{template "cell" (dict "Value" .File "Max" 60)}}{{with .ID}} <span class="text-xs text-dim">{{.}}</span>{{end}}</td><td class="text-bad">{{template "cell" (dict "Value" .Reason "Max" 160)}}</td></tr>{{end}}</tbody></table></div>{{end}}
+</section>{{end}}
+<form method="post" action="/signatures/import" enctype="multipart/form-data" class="panel mt-4 grid max-w-xl gap-2">
+{{template "panel-title" "Upload"}}
+<label><span class="lbl">Nuclei templates (.yaml), up to 50 files of 256 KiB each</span>
+<input name="files" type="file" multiple required accept=".yaml,.yml,application/yaml,text/yaml" class="input"></label>
+<div><button type="submit" class="btn btn-primary">Import</button></div>
+</form>
+{{end}}

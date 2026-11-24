@@ -27,6 +27,8 @@ import (
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/safety"
 	"github.com/chrobson/ramparteye/internal/scope"
+	"github.com/chrobson/ramparteye/internal/secret"
+	"github.com/chrobson/ramparteye/internal/sig"
 	"github.com/chrobson/ramparteye/internal/store"
 	"github.com/chrobson/ramparteye/internal/target"
 	webassets "github.com/chrobson/ramparteye/web"
@@ -76,6 +78,23 @@ type Store interface {
 	CreateScanConfig(ctx context.Context, c store.ScanConfig) (int64, error)
 	UpdateScanConfig(ctx context.Context, c store.ScanConfig) error
 	DeleteScanConfig(ctx context.Context, id int64) error
+
+	// Signatures (custom and nuclei rows are written through sig.DBStore).
+	sig.Store
+	BacktestHistory(ctx context.Context, lastRuns int) ([]store.ObservedService, error)
+
+	// Settings: users and roles, audit log, DefectDojo.
+	Users(ctx context.Context) ([]store.User, error)
+	CreateUser(ctx context.Context, u model.NewUser) (int64, error)
+	SetUserRole(ctx context.Context, userID, roleID int64) error
+	SetUserDisabled(ctx context.Context, userID int64, disabled bool) error
+	Roles(ctx context.Context) ([]store.Role, error)
+	CreateRole(ctx context.Context, name string, perms []string) (int64, error)
+	DeleteRole(ctx context.Context, id int64) (string, error)
+	AuditQuery(ctx context.Context, f store.AuditFilter) ([]store.AuditEntry, error)
+	AuditActions(ctx context.Context) ([]string, error)
+	dojo.SettingsStore
+	DojoPushes(ctx context.Context, limit int) ([]store.DojoPush, error)
 }
 
 // Runner is the scan runner as the UI sees it; *runner.Runner satisfies it.
@@ -91,6 +110,11 @@ type Runner interface {
 type Pusher interface {
 	Status(ctx context.Context) (dojo.ChipState, error)
 	PushRun(ctx context.Context, runID int64, trigger string) (dojo.PushRecord, error)
+}
+
+// DojoChecker probes a DefectDojo connection; *dojo.Client satisfies it.
+type DojoChecker interface {
+	Check(ctx context.Context, product string) (dojo.CheckResult, error)
 }
 
 // Deps are the server's dependencies. Runner, Pusher and Exchange may be
@@ -111,12 +135,23 @@ type Deps struct {
 	// from the UI run under it too (paused at shutdown, resumed by the
 	// scheduler); without it they outlive the request that started them.
 	ShutdownCtx context.Context
+	// Box seals the DefectDojo API token saved in Settings (nil = a token
+	// cannot be saved or opened).
+	Box *secret.Box
+	// DojoClient builds the client of "Test connection" for the effective
+	// settings, token included (nil = dojo.DefaultClient).
+	DojoClient func(dojo.Settings) DojoChecker
+	// SignaturesChanged, when set, is called after a signature was created,
+	// changed, enabled, disabled, deleted or imported, so the scanner can
+	// reload its signature set.
+	SignaturesChanged func()
 }
 
 var (
-	_ Store  = (*store.Store)(nil)
-	_ Runner = (*runner.Runner)(nil)
-	_ Pusher = (*dojo.Pusher)(nil)
+	_ Store       = (*store.Store)(nil)
+	_ Runner      = (*runner.Runner)(nil)
+	_ Pusher      = (*dojo.Pusher)(nil)
+	_ DojoChecker = (*dojo.Client)(nil)
 )
 
 // InstanceHeader marks every response with the installation's id, so the
@@ -247,21 +282,41 @@ func (s *Server) Handler() http.Handler {
 		// Importing needs scans.run as well as the page's export permission.
 		r.With(s.require(auth.PermExport), s.require(auth.PermScansRun)).Post("/exchange/import", s.exchangeImport)
 
-		// Placeholder pages; Task 24 replaces them.
-		for _, n := range navItems {
-			if n.Href == "/signatures" || n.Href == "/settings" {
-				r.With(s.require(n.Perm)).Get(n.Href, s.stubPage(n.Label))
-			}
-		}
+		read.Get("/signatures", s.signaturesList)
+		sw := r.With(s.require(auth.PermSignaturesWrite))
+		sw.Get("/signatures/new", s.signatureNew)
+		sw.Post("/signatures", s.signatureCreate)
+		sw.Post("/signatures/backtest", s.signatureBacktestDraft)
+		// Nuclei import is Admin-only (design 6.6): settings.admin on top of
+		// signatures.write.
+		nuc := r.With(s.require(auth.PermSignaturesWrite), s.require(auth.PermSettingsAdmin))
+		nuc.Get("/signatures/import", s.nucleiPage)
+		nuc.Post("/signatures/import", s.nucleiImport)
+		read.Get("/signatures/{id}", s.signatureView)
+		sw.Get("/signatures/{id}/edit", s.signatureEdit)
+		sw.Post("/signatures/{id}", s.signatureUpdate)
+		sw.Post("/signatures/{id}/toggle", s.signatureToggle)
+		sw.Post("/signatures/{id}/delete", s.signatureDelete)
+		sw.Post("/signatures/{id}/backtest", s.signatureBacktest)
+
+		adm := r.With(s.require(auth.PermSettingsAdmin))
+		adm.Get("/settings", s.settingsIndex)
+		adm.Get("/settings/scope", s.settingsScope)
+		adm.Get("/settings/integrations", s.dojoPage)
+		adm.Post("/settings/integrations", s.dojoSave)
+		adm.Post("/settings/integrations/test", s.dojoTest)
+		adm.Post("/settings/integrations/push", s.dojoPush)
+		adm.Get("/settings/audit", s.auditPage)
+		ua := r.With(s.require(auth.PermUsersAdmin))
+		ua.Get("/settings/users", s.usersPage)
+		ua.Post("/settings/users", s.userCreate)
+		ua.Post("/settings/users/{id}/role", s.userRole)
+		ua.Post("/settings/users/{id}/disable", s.userDisable)
+		ua.Post("/settings/users/{id}/enable", s.userEnable)
+		ua.Post("/settings/roles", s.roleCreate)
+		ua.Post("/settings/roles/{id}/delete", s.roleDelete)
 	})
 	return r
-}
-
-// stubPage renders an empty themed page.
-func (s *Server) stubPage(title string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		s.render(w, r, "stub", map[string]string{"Title": title})
-	}
 }
 
 // require demands a session and perm; a missing permission gets the

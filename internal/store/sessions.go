@@ -16,7 +16,7 @@ func (s *Store) CreateSession(ctx context.Context, tokenHash []byte, userID int6
 }
 
 // SessionUser returns the user owning a session that is not expired now, or
-// ErrUserNotFound.
+// ErrUserNotFound (also for a disabled user).
 func (s *Store) SessionUser(ctx context.Context, tokenHash []byte) (User, error) {
 	return s.SessionUserAt(ctx, tokenHash, time.Now())
 }
@@ -26,7 +26,7 @@ func (s *Store) SessionUserAt(ctx context.Context, tokenHash []byte, now time.Ti
 	return scanUser(s.db.QueryRow(ctx, `SELECT `+userCols+` FROM sessions s
 		JOIN users u ON u.id = s.user_id
 		JOIN roles r ON r.id = u.role_id
-		WHERE s.token_hash = $1 AND s.expires_at > $2`, tokenHash, now))
+		WHERE s.token_hash = $1 AND s.expires_at > $2 AND NOT u.disabled`, tokenHash, now))
 }
 
 // DeleteSession removes one session.

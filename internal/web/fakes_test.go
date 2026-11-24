@@ -25,6 +25,7 @@ import (
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/scope"
+	"github.com/chrobson/ramparteye/internal/secret"
 	"github.com/chrobson/ramparteye/internal/store"
 	webassets "github.com/chrobson/ramparteye/web"
 )
@@ -72,6 +73,7 @@ type fakeStore struct {
 	dash   dashData  // dashboard fixtures
 	assets assetData // asset page fixtures
 	scans  scanData  // scans, changes, targets and profile fixtures
+	admin  adminData // signatures and settings fixtures
 }
 
 // dashData is what the fake store returns for the dashboard queries.
@@ -165,7 +167,7 @@ func (f *fakeStore) SessionUserAt(_ context.Context, tokenHash []byte, now time.
 		return store.User{}, store.ErrUserNotFound
 	}
 	u, ok := f.users[s.userID]
-	if !ok {
+	if !ok || u.Disabled {
 		return store.User{}, store.ErrUserNotFound
 	}
 	return *u, nil
@@ -292,11 +294,12 @@ func (f *fakePusher) PushRun(ctx context.Context, runID int64, trigger string) (
 }
 
 type testEnv struct {
-	srv    *Server
-	h      http.Handler
-	st     *fakeStore
-	runner *fakeRunner
-	pusher *fakePusher
+	srv     *Server
+	h       http.Handler
+	st      *fakeStore
+	runner  *fakeRunner
+	pusher  *fakePusher
+	checker *fakeChecker
 }
 
 type envOpt func(*Deps)
@@ -326,14 +329,19 @@ func newEnv(t *testing.T, opts ...envOpt) *testEnv {
 
 func newEnvFS(t *testing.T, tmpl fs.FS, opts ...envOpt) *testEnv {
 	t.Helper()
-	e := &testEnv{st: newFakeStore(), runner: &fakeRunner{}, pusher: &fakePusher{}}
+	e := &testEnv{st: newFakeStore(), runner: &fakeRunner{}, pusher: &fakePusher{}, checker: &fakeChecker{}}
 	d := Deps{
 		Store:  e.st,
 		Runner: e.runner,
 		Pusher: e.pusher,
-		Scope:  must.Value(scope.New([]netip.Prefix{netip.MustParsePrefix("10.20.0.0/18")}, nil, nil)),
-		Cfg:    config.Config{MaxRate: 5000, SecretKey: []byte("0123456789abcdef0123456789abcdef")},
-		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Box:    must.Value(secret.NewBox([]byte("0123456789abcdef0123456789abcdef"))),
+		DojoClient: func(s dojo.Settings) DojoChecker {
+			e.checker.token = s.Token
+			return e.checker
+		},
+		Scope: must.Value(scope.New([]netip.Prefix{netip.MustParsePrefix("10.20.0.0/18")}, nil, nil)),
+		Cfg:   config.Config{MaxRate: 5000, SecretKey: []byte("0123456789abcdef0123456789abcdef")},
+		Log:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	for _, o := range opts {
 		o(&d)

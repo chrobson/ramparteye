@@ -561,3 +561,15 @@ func TestNewSession(t *testing.T) {
 	assert.Equal(t, t0.Add(SessionTTL), exp)
 	assert.Equal(t, int64(1), f.sessions[string(HashToken(tok))].userID)
 }
+
+func TestDisabledUserCannotLogIn(t *testing.T) {
+	u := mkUser(1, "ann", RoleAnalyst, "password-2", false)
+	u.Disabled = true
+	f := newFake(u)
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+
+	_, _, err := a.Login(context.Background(), "ann", "password-2", "10.0.0.1")
+
+	assert.ErrorIs(t, ErrBadCredentials, err)
+	assert.Len(t, 0, f.sessions)
+}

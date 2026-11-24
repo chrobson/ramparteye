@@ -123,12 +123,12 @@ func TestForbiddenHTMX(t *testing.T) {
 	assert.NotContain(t, "<html", rec.Body.String())
 }
 
-func TestStubPagesByPermission(t *testing.T) {
+func TestPagesByPermission(t *testing.T) {
 	e := newEnv(t)
 	admin := e.login(t, auth.RoleAdmin)
 
 	for _, p := range []string{"/", "/scans", "/assets", "/changes", "/findings",
-		"/signatures", "/profiles", "/exchange", "/settings"} {
+		"/signatures", "/profiles", "/exchange", "/settings/scope"} {
 		rec := e.get(p, admin)
 		assert.Equal(t, http.StatusOK, rec.Code, p)
 		assert.Contain(t, `class="panel`, rec.Body.String(), p)

@@ -1,0 +1,13 @@
+{{/* Backtest result. Data: *BacktestView. */}}
+{{define "backtest"}}<section class="panel mt-4" role="status" aria-label="Backtest">
+{{template "panel-title" "Test against stored history"}}
+<p><b>{{.Total}} match{{if ne .Total 1}}es{{end}}</b> in {{num .Checked}} observation{{if ne .Checked 1}}s{{end}} from the last {{.Runs}} finished scan run{{if ne .Runs 1}}s{{end}}. No requests were sent.</p>
+{{if .PathMatchers}}<p class="mt-1 text-xs text-muted">{{.PathMatchers}} path matcher{{if ne .PathMatchers 1}}s{{end}} need a live request and never match in a backtest; response bodies are not stored either.</p>{{end}}
+{{if .Stopped}}<p class="mt-1 text-xs text-bad">The backtest took too long and stopped early.</p>{{end}}
+{{if .Rows}}<div class="mt-2 overflow-x-auto"><table class="tbl">
+<thead><tr><th>Run</th><th>Service</th><th>Evidence</th></tr></thead>
+<tbody>{{range .Rows}}<tr><td class="font-mono"><a href="/scans/{{.RunID}}">#{{.RunID}}</a></td>
+<td class="font-mono"><a href="{{.Href}}">{{template "cell" (dict "Value" .Asset "Max" 60)}}</a></td>
+<td class="font-mono text-xs">{{template "cell" (dict "Value" .Evidence "Max" 100)}}</td></tr>{{end}}</tbody></table></div>
+{{if gt .Total (len .Rows)}}<p class="mt-1 text-xs text-muted">and {{sub .Total (len .Rows)}} more not listed.</p>{{end}}{{end}}
+</section>{{end}}

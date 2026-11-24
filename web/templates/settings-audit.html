@@ -1,0 +1,26 @@
+{{define "title"}}Settings · Audit log{{end}}
+{{define "content"}}{{$d := .Data}}{{template "settings-tabs" $d.Tabs}}
+<section class="panel" aria-label="Audit log">
+<div class="mb-2 flex flex-wrap items-end justify-between gap-2">
+<p class="text-muted">Every sign-in, change and push, newest first · page {{$d.Page}}</p>
+<form method="get" action="/settings/audit" class="flex items-end gap-2">
+<label><span class="lbl">Action</span><select name="action" class="input"><option value="">All actions</option>{{range $d.Actions}}<option value="{{.}}"{{if eq . $d.Action}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<button type="submit" class="btn">Filter</button>
+</form>
+</div>
+{{if $d.Entries}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>When</th><th>User</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead>
+<tbody>{{range $d.Entries}}<tr>
+<td class="whitespace-nowrap font-mono text-xs" title="{{ago .At}}">{{.At.Format "2006-01-02 15:04:05"}}</td>
+<td>{{with .Login}}{{template "cell" (dict "Value" . "Max" 40)}}{{else}}<span class="text-dim">–</span>{{end}}</td>
+<td class="font-mono">{{.Action}}</td>
+<td class="font-mono">{{template "cell" (dict "Value" .Entity "Max" 60)}}</td>
+<td class="font-mono text-xs">{{if ne .Details "{}"}}{{template "cell" (dict "Value" .Details "Max" 80)}}{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No entries" "Text" "Nothing matches this filter.")}}{{end}}
+{{if or $d.Prev $d.Next}}<nav class="mt-3 flex gap-2" aria-label="Audit log pages">
+{{with $d.Prev}}<a class="btn btn-sm" href="{{.}}">← Newer</a>{{end}}
+{{with $d.Next}}<a class="btn btn-sm" href="{{.}}">Older →</a>{{end}}
+</nav>{{end}}
+</section>
+{{end}}

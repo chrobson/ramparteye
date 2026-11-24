@@ -74,6 +74,11 @@ func (s *Store) HTTPObs(ctx context.Context, serviceID int64) (model.HTTPObs, er
 	if err != nil {
 		return o, err
 	}
+	return o, decodeHTTPObs(&o, status, responseMS, headers, cookies, redirects, tlsJSON)
+}
+
+// decodeHTTPObs fills the nullable and JSON columns of an http_obs row.
+func decodeHTTPObs(o *model.HTTPObs, status, responseMS *int, headers, cookies, redirects, tlsJSON []byte) error {
 	if status != nil {
 		o.Status = *status
 	}
@@ -81,21 +86,21 @@ func (s *Store) HTTPObs(ctx context.Context, serviceID int64) (model.HTTPObs, er
 		o.ResponseMS = *responseMS
 	}
 	if err := json.Unmarshal(headers, &o.Headers); err != nil {
-		return o, fmt.Errorf("headers: %w", err)
+		return fmt.Errorf("headers: %w", err)
 	}
 	if err := json.Unmarshal(cookies, &o.Cookies); err != nil {
-		return o, fmt.Errorf("cookies: %w", err)
+		return fmt.Errorf("cookies: %w", err)
 	}
 	if err := json.Unmarshal(redirects, &o.Redirects); err != nil {
-		return o, fmt.Errorf("redirects: %w", err)
+		return fmt.Errorf("redirects: %w", err)
 	}
 	if len(tlsJSON) > 0 {
 		o.TLS = &model.TLSInfo{}
 		if err := json.Unmarshal(tlsJSON, o.TLS); err != nil {
-			return o, fmt.Errorf("tls: %w", err)
+			return fmt.Errorf("tls: %w", err)
 		}
 	}
-	return o, nil
+	return nil
 }
 
 // ReplaceDetections replaces every detection of a service.

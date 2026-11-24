@@ -1,0 +1,22 @@
+{{define "title"}}Settings · Scope{{end}}
+{{define "content"}}{{$d := .Data}}{{template "settings-tabs" $d.Tabs}}
+<div class="grid gap-3 lg:grid-cols-2">
+<section class="panel" aria-label="Scan scope">
+{{template "panel-title" "Scan scope (read-only)"}}
+{{if $d.Allowed}}<ul class="font-mono">{{range $d.Allowed}}<li class="item">{{.}}</li>{{end}}</ul>
+{{else}}<p role="alert" class="alert-error">No scan scope configured: every scan and target import is refused until RAMPART_ALLOWED_CIDRS is set.</p>{{end}}
+<p class="mt-2 text-xs text-muted">Set by RAMPART_ALLOWED_CIDRS (and RAMPART_ALLOW_HOSTS) at start-up and checked again immediately before every nmap run.</p>
+</section>
+<section class="panel" aria-label="Safety limits">
+{{template "panel-title" "Safety limits"}}
+<dl class="grid grid-cols-[auto,1fr] gap-x-4 gap-y-1.5">
+<dt class="text-muted">Never scanned</dt><dd class="font-mono">{{range $i, $a := $d.Excluded}}{{if $i}}, {{end}}{{$a}}{{else}}<span class="text-dim">–</span>{{end}}</dd>
+<dt class="text-muted">Packet rate limit</dt><dd class="font-mono">{{num $d.MaxRate}} pps</dd>
+<dt class="text-muted">Allowed TCP ports</dt><dd class="font-mono">{{with $d.Ports}}{{.}}{{else}}<span class="text-dim">no restriction</span>{{end}}</dd>
+<dt class="text-muted">HTTP methods</dt><dd class="font-mono">{{$d.Methods}} only</dd>
+<dt class="text-muted">Trusted proxies</dt><dd class="font-mono">{{range $i, $p := $d.Proxies}}{{if $i}}, {{end}}{{$p}}{{else}}<span class="text-dim">none</span>{{end}}</dd>
+</dl>
+<p class="mt-2 text-xs text-muted">RAMPART_SCAN_EXCLUDE, RAMPART_MAX_RATE, RAMPART_SCAN_PORTS and RAMPART_TRUSTED_PROXIES; change them in the environment and restart.</p>
+</section>
+</div>
+{{end}}

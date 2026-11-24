@@ -47,11 +47,45 @@ func (s *Store) AuditEntries(ctx context.Context, limit int) ([]AuditEntry, erro
 	if err != nil {
 		return nil, err
 	}
-	return collect(rows, func(r pgx.Rows) (AuditEntry, error) {
-		var e AuditEntry
-		err := r.Scan(&e.ID, &e.At, &e.UserID, &e.Login, &e.Action, &e.Entity, &e.Details)
-		return e, err
+	return collect(rows, scanAuditEntry)
+}
+
+// AuditFilter selects a page of audit entries, newest first.
+type AuditFilter struct {
+	Action string // "" = every action
+	Limit  int
+	Offset int
+}
+
+// AuditQuery returns one page of audit entries, newest first.
+func (s *Store) AuditQuery(ctx context.Context, f AuditFilter) ([]AuditEntry, error) {
+	rows, err := s.db.Query(ctx, `SELECT a.id, a.at, a.user_id, coalesce(u.login, ''), a.action, a.entity, a.details::text
+		FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+		WHERE $1 = '' OR a.action = $1
+		ORDER BY a.at DESC, a.id DESC LIMIT $2 OFFSET $3`, f.Action, f.Limit, f.Offset)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows, scanAuditEntry)
+}
+
+// AuditActions returns every distinct audit action, sorted.
+func (s *Store) AuditActions(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT action FROM audit_log ORDER BY action`)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows, func(r pgx.Rows) (string, error) {
+		var a string
+		err := r.Scan(&a)
+		return a, err
 	})
+}
+
+func scanAuditEntry(r pgx.Rows) (AuditEntry, error) {
+	var e AuditEntry
+	err := r.Scan(&e.ID, &e.At, &e.UserID, &e.Login, &e.Action, &e.Entity, &e.Details)
+	return e, err
 }
 
 // PutSecret upserts an already encrypted secret.

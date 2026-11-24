@@ -331,4 +331,66 @@
   .tl-swatch.tl-services {
     @apply bg-muted;
   }
+
+  /* Settings tabs (links, one page per tab). */
+  .tabs {
+    @apply mb-3 mt-2 flex flex-wrap gap-4 border-b border-line;
+  }
+  .tab {
+    @apply -mb-px border-b-2 border-transparent py-1.5 text-muted hover:text-fg;
+  }
+  .tab[aria-current="page"] {
+    @apply border-brand text-brand-fg;
+  }
+  .note {
+    @apply rounded border border-edge bg-field px-3 py-2 text-muted;
+  }
+
+  /* Toggle switch: a checkbox styled as in the DefectDojo mockup. */
+  .switch {
+    @apply flex cursor-pointer items-center gap-2 text-sm;
+  }
+  .switch > input {
+    @apply sr-only;
+  }
+  .switch-track {
+    @apply relative inline-block h-3.5 w-[26px] shrink-0 rounded-full bg-edge;
+  }
+  .switch-track::after {
+    @apply absolute left-0.5 top-0.5 h-2.5 w-2.5 rounded-full bg-white;
+    content: "";
+  }
+  .switch > input:checked + .switch-track {
+    @apply bg-brand;
+  }
+  .switch > input:checked + .switch-track::after {
+    @apply left-auto right-0.5;
+  }
+  .switch > input:focus-visible + .switch-track {
+    @apply outline outline-2 outline-offset-2 outline-brand;
+  }
+  .switch > input:disabled + .switch-track {
+    @apply opacity-50;
+  }
+
+  /* DefectDojo checklist and push history: ok, failed, warning, not
+     checked and skipped rows must never look alike. */
+  .check-row {
+    @apply py-0.5;
+  }
+  .check-row.ok {
+    @apply text-ok;
+  }
+  .check-row.bad {
+    @apply text-bad;
+  }
+  .check-row.warn {
+    @apply text-med;
+  }
+  .check-row.skip {
+    @apply text-dim;
+  }
+  .push-skipped td {
+    @apply text-dim;
+  }
 }

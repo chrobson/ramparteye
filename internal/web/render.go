@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"io/fs"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +76,7 @@ func (s *Server) funcs(hashes map[string]string) template.FuncMap {
 		"hasID":       hasID,
 		"sub":         func(a, b int) int { return a - b },
 		"f1":          f1,
+		"hasPerm":     func(list []string, p auth.Perm) bool { return slices.Contains(list, string(p)) },
 	}
 }
 

@@ -1,0 +1,26 @@
+{{define "title"}}Signature {{.Data.Row.ID}}{{end}}
+{{define "content"}}{{$d := .Data}}{{$r := $d.Row}}{{$w := can .Ctx "signatures.write"}}
+<p class="text-xs text-muted"><a href="/signatures">Signatures</a> /</p>
+<div class="flex flex-wrap items-end justify-between gap-2">
+<div><h1 class="page-title">{{template "cell" (dict "Value" $r.Name "Max" 80)}}</h1>
+<p class="font-mono text-xs text-dim">{{$r.ID}} · {{if $r.IsBuiltin}}built-in{{else}}{{$r.Source}}{{end}} · {{if $r.Enabled}}<span class="text-ok">enabled</span>{{else}}disabled{{end}}{{if $r.PathProbe}} · path probe{{end}}</p></div>
+{{if $w}}<div class="flex flex-wrap gap-2">
+<form method="post" action="/signatures/{{$r.ID}}/backtest"><button type="submit" class="btn">Test against history</button></form>
+<form method="post" action="/signatures/{{$r.ID}}/toggle"><input type="hidden" name="back" value="view"><button type="submit" class="btn">{{if $r.Enabled}}Disable{{else}}Enable{{end}}</button></form>
+{{if not $r.IsBuiltin}}<a class="btn" href="/signatures/{{$r.ID}}/edit">Edit</a>
+<form method="post" action="/signatures/{{$r.ID}}/delete" data-confirm="Delete signature {{$r.ID}}?" data-confirm-ok="Delete"><button type="submit" class="btn">Delete</button></form>{{end}}
+</div>{{end}}
+</div>
+{{if $d.Errors}}<div role="alert" class="alert-error mt-4"><p>This stored signature no longer validates:</p><ul class="list-disc pl-5">{{range $d.Errors}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{with $d.Parsed}}<section class="panel mt-4" aria-label="Summary">
+{{template "panel-title" "Summary"}}
+{{with .Description}}<p>{{.}}</p>{{end}}
+<p class="mt-1 text-muted">{{.Category}} · confidence {{.Confidence}}%{{with .Severity}} · severity {{.}}{{end}} · {{len .Matchers}} matcher{{if ne (len .Matchers) 1}}s{{end}} ({{if eq .Condition "and"}}all must match{{else}}any may match{{end}})</p>
+{{with .Remediation}}<p class="mt-1"><span class="lbl">Remediation</span> {{.}}</p>{{end}}
+</section>{{end}}
+{{with $d.Backtest}}{{template "backtest" .}}{{end}}
+<section class="panel mt-4" aria-label="YAML">
+{{template "panel-title" "YAML"}}
+<pre class="overflow-x-auto whitespace-pre font-mono text-xs">{{$r.YAML}}</pre>
+</section>
+{{end}}

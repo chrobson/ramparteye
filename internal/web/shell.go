@@ -141,7 +141,7 @@ func (s *Server) shell(r *http.Request, u auth.User) Shell {
 	}
 	sh.DojoChip = dojoChip(state, err, agoFunc(s.now))
 	if auth.Can(r.Context(), auth.PermSettingsAdmin) {
-		sh.DojoChip.Href = "/settings"
+		sh.DojoChip.Href = "/settings/integrations"
 	}
 	return sh
 }
