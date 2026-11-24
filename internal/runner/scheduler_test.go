@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ctx42/testing/pkg/assert"
+	"github.com/ctx42/testing/pkg/must"
 
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/store"
@@ -157,7 +158,7 @@ func TestTickLeavesRunsOfOtherProcesses(t *testing.T) {
 	ctx := context.Background()
 	runID, err := f.r.createRun(ctx, f.fs.configs[0])
 	assert.NoError(t, err)
-	assert.NoError(t, f.fs.StartRun(ctx, runID))
+	assert.True(t, must.Value(f.fs.StartRun(ctx, runID)))
 	f.r.Tick(ctx, time.Now().Add(time.Hour))
 	f.r.Wait()
 	assert.Equal(t, 1, f.fs.runCount())

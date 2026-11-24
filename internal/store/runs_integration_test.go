@@ -23,7 +23,7 @@ func TestRunLifecycle(t *testing.T) {
 		netip.MustParsePrefix("10.20.2.5/32"),
 	}
 	runID := must.Value(s.CreateRun(ctx, &cfgID, chunks))
-	assert.NoError(t, s.StartRun(ctx, runID))
+	assert.True(t, must.Value(s.StartRun(ctx, runID)))
 
 	// Concurrent leases never return the same chunk.
 	var mu sync.Mutex
@@ -81,7 +81,7 @@ func TestRunLifecycle(t *testing.T) {
 		}
 	}
 	assert.Equal(t, store.ChunkCounts{Done: 2, Failed: 1}, must.Value(s.CountChunks(ctx, runID)))
-	assert.NoError(t, s.FinishRun(ctx, runID, store.RunDone, 2*time.Second))
+	assert.True(t, must.Value(s.FinishRun(ctx, runID, store.RunDone, 2*time.Second)))
 
 	run := must.Value(s.Run(ctx, runID))
 	assert.Equal(t, store.RunDone, run.Status)
@@ -132,9 +132,111 @@ func TestCancelRuns(t *testing.T) {
 	assert.True(t, must.Value(s.CancelRequested(ctx, a)))
 	assert.True(t, must.Value(s.CancelRequested(ctx, b)))
 
-	assert.NoError(t, s.FinishRun(ctx, a, store.RunCancelled, time.Second))
+	assert.True(t, must.Value(s.FinishRun(ctx, a, store.RunCancelled, time.Second)))
 	run := must.Value(s.Run(ctx, a))
 	assert.Equal(t, store.RunCancelled, run.Status)
 	assert.NotNil(t, run.FinishedAt)
-	assert.Len(t, 1, must.Value(s.OpenRuns(ctx)))
+	// A run with a cancel request is never resumed.
+	assert.Len(t, 0, must.Value(s.OpenRuns(ctx)))
+}
+
+// A final status is never overwritten: neither a late FinishRun nor
+// StartRun changes a done, failed or cancelled run.
+func TestFinishRunKeepsFinalStatus(t *testing.T) {
+	s, _ := newStore(t)
+	for _, final := range []string{store.RunDone, store.RunFailed, store.RunCancelled} {
+		id := must.Value(s.CreateRun(ctx, nil, nil))
+		assert.True(t, must.Value(s.StartRun(ctx, id)))
+		assert.True(t, must.Value(s.FinishRun(ctx, id, final, time.Second)))
+
+		assert.False(t, must.Value(s.FinishRun(ctx, id, store.RunPaused, time.Second)))
+		assert.False(t, must.Value(s.FinishRun(ctx, id, store.RunDone, time.Second)))
+		assert.False(t, must.Value(s.StartRun(ctx, id)))
+		run := must.Value(s.Run(ctx, id))
+		assert.Equal(t, final, run.Status)
+		assert.Equal(t, int64(1000), *run.DurationMS)
+		assert.NotNil(t, run.FinishedAt)
+	}
+	// A paused run can be finished later.
+	id := must.Value(s.CreateRun(ctx, nil, nil))
+	assert.True(t, must.Value(s.FinishRun(ctx, id, store.RunPaused, time.Second)))
+	assert.True(t, must.Value(s.StartRun(ctx, id)))
+	assert.True(t, must.Value(s.FinishRun(ctx, id, store.RunDone, time.Second)))
+	_, err := s.FinishRun(ctx, -1, store.RunDone, 0)
+	assert.NoError(t, err)
+}
+
+// CancelOpenRuns requests a cancel for every unfinished scan run (stopped
+// ones too) and marks the ones not running cancelled at once; a running run
+// is left to the process executing it.
+func TestCancelOpenRuns(t *testing.T) {
+	s, pool := newStore(t)
+	queued := must.Value(s.CreateRun(ctx, nil, nil))
+	running := must.Value(s.CreateRun(ctx, nil, nil))
+	assert.True(t, must.Value(s.StartRun(ctx, running)))
+	stopped := must.Value(s.CreateRun(ctx, nil, nil))
+	assert.True(t, must.Value(s.StopRun(ctx, stopped)))
+	done := must.Value(s.CreateRun(ctx, nil, nil))
+	assert.True(t, must.Value(s.FinishRun(ctx, done, store.RunDone, 0)))
+	imported := insertRun(t, pool, "import", store.RunRunning)
+	uid := must.Value(s.CreateUser(ctx, model.NewUser{Login: "op", PasswordHash: "h", Role: "Admin"}))
+
+	requested, finished, err := s.CancelOpenRuns(ctx, &uid)
+
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{queued, running, stopped}, requested)
+	assert.Equal(t, []int64{queued, stopped}, finished)
+	for _, id := range []int64{queued, stopped} {
+		run := must.Value(s.Run(ctx, id))
+		assert.Equal(t, store.RunCancelled, run.Status)
+		assert.NotNil(t, run.FinishedAt)
+	}
+	assert.Equal(t, store.RunRunning, must.Value(s.Run(ctx, running)).Status)
+	assert.Equal(t, store.RunDone, must.Value(s.Run(ctx, done)).Status)
+	assert.Equal(t, store.RunRunning, must.Value(s.Run(ctx, imported)).Status)
+	for _, id := range requested {
+		assert.True(t, must.Value(s.CancelRequested(ctx, id)))
+	}
+	assert.False(t, must.Value(s.CancelRequested(ctx, done)))
+	var by int64
+	must.Nil(pool.QueryRow(ctx, `SELECT requested_by FROM run_cancel_requests WHERE run_id = $1`, running).Scan(&by))
+	assert.Equal(t, uid, by)
+	assert.Len(t, 0, must.Value(s.OpenRuns(ctx)))
+
+	// Again: only the still running run, already requested (idempotent).
+	requested, finished, err = s.CancelOpenRuns(ctx, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, []int64{running}, requested)
+	assert.Len(t, 0, finished)
+
+	// Nothing open: nothing requested.
+	assert.True(t, must.Value(s.FinishRun(ctx, running, store.RunCancelled, 0)))
+	requested, finished, err = s.CancelOpenRuns(ctx, nil)
+	assert.NoError(t, err)
+	assert.Len(t, 0, requested)
+	assert.Len(t, 0, finished)
+}
+
+// After a crash a run with a cancel request is marked cancelled instead of
+// paused, so it is never resumed.
+func TestResetRunningCancelsRequestedRuns(t *testing.T) {
+	s, _ := newStore(t)
+	p := []netip.Prefix{netip.MustParsePrefix("10.20.0.0/24")}
+	cancelled := must.Value(s.CreateRun(ctx, nil, p))
+	kept := must.Value(s.CreateRun(ctx, nil, p))
+	for _, id := range []int64{cancelled, kept} {
+		assert.True(t, must.Value(s.StartRun(ctx, id)))
+		lease(t, s, id)
+	}
+	assert.NoError(t, s.RequestCancel(ctx, []int64{cancelled}, nil))
+
+	assert.Equal(t, int64(2), must.Value(s.ResetRunning(ctx)))
+
+	run := must.Value(s.Run(ctx, cancelled))
+	assert.Equal(t, store.RunCancelled, run.Status)
+	assert.NotNil(t, run.FinishedAt)
+	open := must.Value(s.OpenRuns(ctx))
+	assert.Len(t, 1, open)
+	assert.Equal(t, kept, open[0].ID)
+	assert.Equal(t, store.RunPaused, open[0].Status)
 }

@@ -15,9 +15,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"runtime/debug"
+	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/chrobson/ramparteye/internal/diff"
@@ -40,8 +39,11 @@ type Store interface {
 	CreateRun(ctx context.Context, configID *int64, chunks []netip.Prefix) (int64, error)
 	LastRun(ctx context.Context, configID int64) (*store.RunInfo, error)
 	OpenRuns(ctx context.Context) ([]store.RunInfo, error)
-	StartRun(ctx context.Context, runID int64) error
-	FinishRun(ctx context.Context, runID int64, status string, active time.Duration) error
+	StartRun(ctx context.Context, runID int64) (bool, error)
+	FinishRun(ctx context.Context, runID int64, status string, active time.Duration) (bool, error)
+	CancelOpenRuns(ctx context.Context, by *int64) (requested, finished []int64, err error)
+	CancelRequested(ctx context.Context, runID int64) (bool, error)
+	InsertAudit(ctx context.Context, userID *int64, action, entity string, details any) error
 
 	LeaseChunk(ctx context.Context, runID int64) (store.Chunk, bool, error)
 	CompleteChunk(ctx context.Context, c store.Chunk, dur time.Duration, hosts []model.HostObs, svcs []model.ServiceObs) error
@@ -85,7 +87,12 @@ var (
 	ErrAlreadyRunning = errors.New("a run of this scan profile is already active")
 	// ErrNoTargets is returned when no target of a profile is inside the scope.
 	ErrNoTargets = errors.New("scan profile has no targets inside the scan scope")
+	// ErrRunCancelled is the cause of a cancelled run's context.
+	ErrRunCancelled = errors.New("scan run cancelled")
 )
+
+// AuditCancelAll is the audit action of CancelAll.
+const AuditCancelAll = "scans.cancel_all"
 
 // Config holds the instance-wide settings of a Runner. Zero values select
 // the defaults.
@@ -179,7 +186,7 @@ type Runner struct {
 	active   map[int64]*activeRun // by run id
 	starting map[int64]bool       // profile ids with a run being created
 	ended    map[int64]bool       // runs whose OnRunDone was called
-	stale    map[int64]bool       // runs left running because FinishRun failed
+	stale    map[int64]staleRun   // runs left running because FinishRun failed
 	noFetch  sync.Once            // warns once that path probes are disabled
 	wg       sync.WaitGroup
 
@@ -189,7 +196,7 @@ type Runner struct {
 type activeRun struct {
 	configID int64
 	manual   bool // started by Start: ignores the window
-	cancel   context.CancelFunc
+	ctl      *control
 }
 
 // New returns a Runner. sc re-checks the scope right before every nmap exec;
@@ -229,9 +236,51 @@ func (r *Runner) Stop(runID int64) bool {
 	defer r.mu.Unlock()
 	a, ok := r.active[runID]
 	if ok {
-		a.cancel()
+		a.ctl.stop()
 	}
 	return ok
+}
+
+// CancelAll cancels every unfinished scan run, here and in other processes,
+// on behalf of user by (0 = system). Runs executing in this process are
+// cancelled at once: their nmap processes are killed, interrupted chunks
+// return to pending, the safety receipt is saved and the run ends
+// cancelled; post-processing stops and the diff is not applied. A cancel
+// request is stored for every unfinished run, so another process stops its
+// runs at its next chunk boundary and no cancelled run is ever resumed;
+// queued and paused runs are marked cancelled at once. OnRunDone gets
+// "cancelled". It returns the ids of the runs cancelled, ascending, and
+// records the audit entry AuditCancelAll.
+func (r *Runner) CancelAll(ctx context.Context, by int64) ([]int64, error) {
+	var actor *int64
+	if by > 0 {
+		actor = &by
+	}
+	r.mu.Lock()
+	ids := make([]int64, 0, len(r.active))
+	for id, a := range r.active {
+		a.ctl.cancel(ErrRunCancelled)
+		ids = append(ids, id)
+	}
+	r.mu.Unlock()
+
+	requested, finished, err := r.st.CancelOpenRuns(ctx, actor)
+	if err != nil {
+		slices.Sort(ids)
+		return ids, fmt.Errorf("store cancel requests: %w", err)
+	}
+	for _, id := range finished {
+		r.publish(Event{RunID: id, Kind: EventFinished, Progress: 1, Message: store.RunCancelled})
+		r.runEnded(context.WithoutCancel(ctx), id, store.RunCancelled)
+	}
+	ids = append(ids, requested...)
+	slices.Sort(ids)
+	ids = slices.Compact(ids)
+	r.cfg.Log.Info("all scan runs cancelled", "runs", ids, "by", by)
+	if err := r.st.InsertAudit(ctx, actor, AuditCancelAll, "scan_runs", map[string]any{"runs": ids}); err != nil {
+		return ids, fmt.Errorf("audit: %w", err)
+	}
+	return ids, nil
 }
 
 // Wait blocks until every run started by Start or Tick has stopped.
@@ -276,284 +325,6 @@ func (r *Runner) plan(ctx context.Context, cfg store.ScanConfig) (Plan, error) {
 	return p, nil
 }
 
-// session is one execution of a run: from start or resume until every chunk
-// is finished or the context ends.
-type session struct {
-	runID     int64
-	cfg       store.ScanConfig
-	meter     *safety.Meter
-	hostnames map[netip.Addr][]string
-	small     scan.Opts // chunks of at most smallMax addresses
-	large     scan.Opts
-	smallMax  int
-	sizer     *Sizer
-	perWorker int
-	total     int // chunks of the run
-	log       *slog.Logger
-	panicked  atomic.Bool // a worker panicked: the run fails
-}
-
-// optsFor returns the scan options of a chunk. The auto profile is decided
-// per chunk, so a single address keeps every port and the deep version pass
-// even when the run also covers a large range.
-func (s *session) optsFor(p netip.Prefix) scan.Opts {
-	if s.isSmall(p) {
-		return s.small
-	}
-	return s.large
-}
-
-func (s *session) isSmall(p netip.Prefix) bool {
-	return s.smallMax > 0 && CountAddrs([]netip.Prefix{p}) <= uint64(s.smallMax)
-}
-
-// newSession prepares a session; the error is a profile problem that makes
-// the run unrunnable (port plan).
-func (r *Runner) newSession(ctx context.Context, runID int64, cfg store.ScanConfig, scheduled time.Time) (*session, error) {
-	s := &session{runID: runID, cfg: cfg, meter: safety.NewMeter(), smallMax: r.cfg.AllPortsMaxAddrs,
-		sizer: NewSizer(0, r.cfg.GroupTarget), log: r.cfg.Log.With("run", runID, "profile", cfg.Name)}
-	small, err := ResolvePorts(cfg, 1, r.cfg.AllPortsMaxAddrs, r.cfg.AllowedPorts, r.cfg.ExtraPorts)
-	if err != nil {
-		return nil, err
-	}
-	large, err := ResolvePorts(cfg, 1<<62, r.cfg.AllPortsMaxAddrs, r.cfg.AllowedPorts, r.cfg.ExtraPorts)
-	if err != nil {
-		return nil, err
-	}
-	// Hostnames for host observations and virtual host probes; a resolver
-	// failure only loses names.
-	if p, err := r.plan(ctx, cfg); err != nil {
-		s.log.Warn("hostnames unavailable", "err", err)
-	} else {
-		s.hostnames = p.Hostnames
-	}
-	rate := cfg.MaxRate
-	if r.cfg.MaxRate > 0 && (rate <= 0 || rate > r.cfg.MaxRate) {
-		rate = r.cfg.MaxRate
-	}
-	s.meter.SetBudget(safety.Budget{RunPPS: rate, PolicyPPS: r.cfg.MaxRate, PathProbesPerHost: r.cfg.PathProbesPerHost})
-	if !scheduled.IsZero() && cfg.HasWindow() {
-		s.meter.SetWindow(safety.Window{Start: *cfg.WindowStart, End: *cfg.WindowEnd, Loc: scheduled.Location()})
-	}
-	// Probes spent by earlier sessions of the run count against the budget.
-	if counts, err := r.st.SafetyProbes(ctx, runID); err != nil {
-		s.log.Warn("path probe counts not loaded", "err", err)
-	} else {
-		s.meter.SeedProbes(counts)
-	}
-	base := scan.Opts{TopPorts: cfg.TopPorts, Privileged: r.cfg.Privileged}
-	s.small, s.large = base, base
-	s.small.Ports, s.small.ExtraPorts, s.small.DeepUnknown = small.Ports, small.Extra, s.smallMax > 0
-	s.large.Ports, s.large.ExtraPorts = large.Ports, large.Extra
-	s.small.MaxRate, s.large.MaxRate = rate, rate // split per worker in execute
-	return s, nil
-}
-
-// execute runs the pending chunks of a run until none is left or ctx ends.
-// The run is then done (post-processed), failed (every chunk failed) or
-// paused (chunks left). scheduled is the scheduler time of a windowed run;
-// zero for a manual run.
-func (r *Runner) execute(ctx context.Context, runID int64, cfg store.ScanConfig, scheduled time.Time) {
-	started := r.cfg.Now()
-	var s *session
-	settled := false
-	settle := func(status, msg string) {
-		settled = true
-		r.finish(ctx, s, runID, status, r.cfg.Now().Sub(started), msg)
-	}
-	// A panic anywhere in the run (store, pipeline, a worker) fails the run
-	// instead of the process; the run still gets its finished event and
-	// OnRunDone.
-	defer func() {
-		p := recover()
-		if p == nil {
-			return
-		}
-		r.cfg.Log.Error("scan run panicked", "run", runID, "panic", p, "stack", string(debug.Stack()))
-		if !settled {
-			settle(store.RunFailed, fmt.Sprintf("%s; internal error: %v", store.RunFailed, p))
-		}
-	}()
-
-	s, err := r.newSession(ctx, runID, cfg, scheduled)
-	if err != nil {
-		r.cfg.Log.Error("scan run cannot start", "run", runID, "profile", cfg.Name, "err", err)
-		s = nil
-		settle(store.RunFailed, store.RunFailed+"; "+err.Error())
-		return
-	}
-	ctx = safety.WithMeter(ctx, s.meter)
-	// When the outcome cannot be read, the run is saved as paused (best
-	// effort) so the scheduler resumes it; it is never left running.
-	if err := r.st.StartRun(ctx, runID); err != nil {
-		s.log.Error("scan run not started", "err", err)
-		settle(store.RunPaused, store.RunPaused+"; start: "+err.Error())
-		return
-	}
-	counts, err := r.st.CountChunks(ctx, runID)
-	if err != nil {
-		s.log.Error("scan run not started", "err", err)
-		settle(store.RunPaused, store.RunPaused+"; count chunks: "+err.Error())
-		return
-	}
-	s.total = counts.Pending + counts.Running + counts.Done + counts.Failed
-	// More workers than chunks would only idle while taking a share of the
-	// rate, so a single-address run gets the whole rate; more workers than
-	// packets/s would exceed the rate at 1 packet/s each.
-	k := max(cfg.Workers, 1)
-	if n := counts.Pending; n > 0 && n < k {
-		k = n
-	}
-	if rate := s.small.MaxRate; rate > 0 && k > rate {
-		k = rate
-	}
-	s.perWorker = PerWorkerRate(s.small.MaxRate, k)
-	s.small.MaxRate, s.large.MaxRate = s.perWorker, s.perWorker
-	s.log.Info("scan run started", "workers", k, "rate_per_worker", s.perWorker, "chunks", s.total,
-		"pending", counts.Pending)
-	r.publish(Event{RunID: runID, Kind: EventStarted, Progress: s.progress(counts)})
-
-	var wg sync.WaitGroup
-	for range k {
-		wg.Go(func() {
-			defer func() {
-				if p := recover(); p != nil {
-					s.log.Error("scan worker panicked", "panic", p, "stack", string(debug.Stack()))
-					s.panicked.Store(true)
-				}
-			}()
-			if err := r.worker(ctx, s); err != nil {
-				s.log.Error("scan worker stopped", "err", err)
-			}
-		})
-	}
-	wg.Wait()
-	if s.panicked.Load() {
-		settle(store.RunFailed, store.RunFailed+"; internal error in a scan worker")
-		return
-	}
-
-	// Persist the outcome even when ctx is already done.
-	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
-	defer cancel()
-	if counts, err = r.st.CountChunks(dbctx, runID); err != nil {
-		s.log.Error("scan run outcome unknown", "err", err)
-		settle(store.RunPaused, store.RunPaused+"; count chunks: "+err.Error())
-		return
-	}
-	status := RunStatus(counts)
-	msg := status
-	if status == store.RunDone {
-		// Post-processing is not bound to the window deadline; every probe
-		// has its own deadline.
-		if err := r.postProcess(context.WithoutCancel(ctx), s); err != nil {
-			s.log.Error("post-processing failed", "err", err)
-			msg = status + "; post-processing: " + err.Error()
-		}
-	}
-	settle(status, msg)
-}
-
-// finish saves the session's last receipt delta (s may be nil), stores the
-// run status, publishes the finished event and calls OnRunDone for a final
-// status. The finished event is always published. When the status cannot be
-// stored, the run stays running in the database: it is remembered as stale
-// so Tick resumes it instead of taking it for a run of another process, and
-// OnRunDone waits for the status to be stored.
-//
-// A crash between FinishRun and OnRunDone loses the hook call for that run
-// (the run is final and never resumed); persisting "hook delivered" is left
-// to the hook's consumers (Tasks 15/18).
-func (r *Runner) finish(ctx context.Context, s *session, runID int64, status string, active time.Duration, msg string) {
-	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
-	defer cancel()
-	log := r.cfg.Log.With("run", runID)
-	e := Event{RunID: runID, Kind: EventFinished}
-	if s != nil {
-		e.PPS = int(s.meter.Snapshot().PPS)
-		if !r.saveSafetyFinal(dbctx, s) {
-			msg += "; safety receipt incomplete"
-		} else if rc, err := r.st.SafetyReceipt(dbctx, runID); err == nil {
-			rep := safety.BuildReport(rc)
-			msg += "; safety " + string(rep.Status)
-			log.Info("safety receipt", "status", rep.Status, "nmap_packets", rc.NmapPackets,
-				"effective_pps", rep.EffectivePPS, "http_get", rc.HTTPGet, "http_head", rc.HTTPHead,
-				"http_other", rc.HTTPOther, "targets_outside_scope", rc.TargetsOutsideAllowlist)
-		}
-	}
-	if err := r.st.FinishRun(dbctx, runID, status, active); err != nil {
-		log.Error("scan run status not saved, will resume", "status", status, "err", err)
-		r.setStale(runID, true)
-		e.Message = msg + "; status not saved: " + err.Error()
-		r.publish(e)
-		return
-	}
-	r.setStale(runID, false)
-	log.Info("scan run stopped", "status", status, "active_ms", active.Milliseconds())
-	final := status == store.RunDone || status == store.RunFailed || status == store.RunCancelled
-	e.Message = msg
-	if final {
-		e.Progress = 1
-	}
-	r.publish(e)
-	if final {
-		r.runEnded(context.WithoutCancel(ctx), runID, status)
-	}
-}
-
-// setStale records whether a run's last status could not be stored.
-func (r *Runner) setStale(runID int64, stale bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !stale {
-		delete(r.stale, runID)
-		return
-	}
-	if r.stale == nil {
-		r.stale = map[int64]bool{}
-	}
-	r.stale[runID] = true
-}
-
-func (r *Runner) isStale(runID int64) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.stale[runID]
-}
-
-// runEnded calls OnRunDone once per run.
-func (r *Runner) runEnded(ctx context.Context, runID int64, status string) {
-	r.mu.Lock()
-	if r.ended == nil {
-		r.ended = map[int64]bool{}
-	}
-	seen := r.ended[runID]
-	r.ended[runID] = true
-	r.mu.Unlock()
-	if !seen && r.OnRunDone != nil {
-		r.OnRunDone(ctx, runID, status)
-	}
-}
-
-func (s *session) progress(c store.ChunkCounts) float64 {
-	if s.total == 0 {
-		return 0
-	}
-	return scanShare * float64(c.Done+c.Failed) / float64(s.total)
-}
-
-// RunStatus derives the run status from chunk counts after workers stopped.
-func RunStatus(c store.ChunkCounts) string {
-	switch {
-	case c.Pending > 0 || c.Running > 0:
-		return store.RunPaused
-	case c.Done == 0 && c.Failed > 0:
-		return store.RunFailed
-	default:
-		return store.RunDone
-	}
-}
-
 // PerWorkerRate splits a run's max rate r across k workers (at least 1
 // packet/s each). 0 means unlimited.
 func PerWorkerRate(r, k int) int {
@@ -564,7 +335,7 @@ func PerWorkerRate(r, k int) int {
 }
 
 // register marks a run active in this process; false if it already is.
-func (r *Runner) register(runID, configID int64, manual bool, cancel context.CancelFunc) bool {
+func (r *Runner) register(runID int64, a *activeRun) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.active == nil {
@@ -573,7 +344,7 @@ func (r *Runner) register(runID, configID int64, manual bool, cancel context.Can
 	if _, ok := r.active[runID]; ok {
 		return false
 	}
-	r.active[runID] = &activeRun{configID: configID, manual: manual, cancel: cancel}
+	r.active[runID] = a
 	return true
 }
 
@@ -584,11 +355,11 @@ func (r *Runner) unregister(runID int64) {
 }
 
 // reserve marks a profile as getting a new run; false when it already has
-// an active or starting run.
+// an active, starting or stale run.
 func (r *Runner) reserve(configID int64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.starting[configID] || r.activeLocked(configID) != nil {
+	if r.starting[configID] || r.activeLocked(configID) != nil || r.staleLocked(configID) {
 		return false
 	}
 	if r.starting == nil {
@@ -623,20 +394,14 @@ func (r *Runner) isActive(runID int64) bool {
 // launch executes a run in a goroutine. A non-zero deadline (window end)
 // pauses the run when reached; manual runs are not paused by the scheduler.
 func (r *Runner) launch(base context.Context, runID int64, cfg store.ScanConfig, deadline, scheduled time.Time, manual bool) {
-	var ctx context.Context
-	var cancel context.CancelFunc
-	if deadline.IsZero() {
-		ctx, cancel = context.WithCancel(base)
-	} else {
-		ctx, cancel = context.WithDeadline(base, deadline)
-	}
-	if !r.register(runID, cfg.ID, manual, cancel) {
-		cancel()
+	c := newControl(base, deadline)
+	if !r.register(runID, &activeRun{configID: cfg.ID, manual: manual, ctl: c}) {
+		c.release()
 		return
 	}
 	r.wg.Go(func() {
 		defer r.unregister(runID)
-		defer cancel()
-		r.execute(ctx, runID, cfg, scheduled)
+		defer c.release()
+		r.execute(c, runID, cfg, scheduled)
 	})
 }

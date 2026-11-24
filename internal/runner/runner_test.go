@@ -148,7 +148,7 @@ func TestInterruptedChunkReturnsToPending(t *testing.T) {
 	runID := must.Value(f.r.createRun(context.Background(), f.cfg))
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond) // window end
 	defer cancel()
-	f.r.execute(ctx, runID, f.cfg, time.Time{})
+	f.r.execute(newControl(ctx, time.Time{}), runID, f.cfg, time.Time{})
 	assert.Equal(t, store.RunPaused, f.fs.runStatus(runID))
 	var pending fakeChunk
 	for _, c := range f.fs.chunksOf(runID) {
@@ -163,7 +163,7 @@ func TestInterruptedChunkReturnsToPending(t *testing.T) {
 
 	// Next window: the chunk is picked up again and the run completes.
 	f.sc.setBlock(blocked, false)
-	f.r.execute(context.Background(), runID, f.cfg, time.Time{})
+	f.r.execute(newControl(context.Background(), time.Time{}), runID, f.cfg, time.Time{})
 	assert.Equal(t, store.RunDone, f.fs.runStatus(runID))
 	got := f.fs.chunk(pending.ID)
 	assert.Equal(t, 1, got.Attempts) // the interruption was refunded
@@ -252,7 +252,7 @@ func TestRecoverResetsRunning(t *testing.T) {
 	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/23"})
 	ctx := context.Background()
 	runID := must.Value(f.r.createRun(ctx, f.cfg))
-	must.Nil(f.fs.StartRun(ctx, runID))
+	assert.True(t, must.Value(f.fs.StartRun(ctx, runID)))
 	c, _, _ := f.fs.LeaseChunk(ctx, runID) // the process "crashes" here
 	assert.NoError(t, f.r.Recover(ctx))
 	assert.Equal(t, store.ChunkPending, f.fs.chunk(c.ID).status)
@@ -344,10 +344,10 @@ func TestOnRunDoneCalledOnce(t *testing.T) {
 	// The resumed session finishes it: exactly one call.
 	f.sc.setBlock(blocked, false)
 	f.sc.started = nil
-	f.r.execute(context.Background(), runID, f.cfg, time.Time{})
+	f.r.execute(newControl(context.Background(), time.Time{}), runID, f.cfg, time.Time{})
 	assert.Equal(t, []string{store.RunDone}, calls)
 	// Executing a finished run again never repeats the hook.
-	f.r.execute(context.Background(), runID, f.cfg, time.Time{})
+	f.r.execute(newControl(context.Background(), time.Time{}), runID, f.cfg, time.Time{})
 	assert.Equal(t, []string{store.RunDone}, calls)
 
 	// A failed run gets the hook with its status.

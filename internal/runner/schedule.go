@@ -72,7 +72,9 @@ func (r *Runner) Loop(ctx context.Context, every time.Duration) error {
 	}
 }
 
-// Tick is one scheduler step at now. For every profile it:
+// Tick is one scheduler step at now. It first stores the status of the
+// runs whose FinishRun failed (stale), whatever their profile. Then for
+// every profile it:
 //   - pauses a scheduled run executing here when now is outside the window
 //     or the profile was disabled (manual runs ignore the window);
 //   - resumes the oldest queued or paused run of the profile inside the
@@ -83,6 +85,7 @@ func (r *Runner) Loop(ctx context.Context, every time.Duration) error {
 // process; a scheduled run's context ends at its window end, so it pauses
 // by itself and its interrupted chunks return to pending. Errors are logged.
 func (r *Runner) Tick(ctx context.Context, now time.Time) {
+	r.retryStale(ctx)
 	cfgs, err := r.st.ScanConfigs(ctx)
 	if err != nil {
 		r.cfg.Log.Error("scheduler: load scan profiles", "err", err)
@@ -99,10 +102,14 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) {
 		if o.ConfigID == nil {
 			continue
 		}
+		// A run whose status this process still fails to store (stale) is
+		// left alone: retryStale stores it, it is never executed again.
+		if r.isStale(o.ID) {
+			continue
+		}
 		// A running run not executing here belongs to another live process
-		// (runs of a dead process were reset to paused by Recover), unless
-		// this process failed to store its last status (stale): resume it.
-		if o.Status == store.RunRunning && !r.isStale(o.ID) {
+		// (runs of a dead process were reset to paused by Recover).
+		if o.Status == store.RunRunning {
 			if !r.isActive(o.ID) {
 				elsewhere[*o.ConfigID] = true
 			}
@@ -132,7 +139,7 @@ func (r *Runner) tickConfig(ctx context.Context, now time.Time, cfg store.ScanCo
 	r.mu.Lock()
 	a, starting := r.activeLocked(cfg.ID), r.starting[cfg.ID]
 	if a != nil && !a.manual && (!inWin || !cfg.Enabled) {
-		a.cancel() // the run saves itself as paused
+		a.ctl.stop() // the run saves itself as paused
 	}
 	r.mu.Unlock()
 	if a != nil || starting || !cfg.Enabled || !inWin {

@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chrobson/ramparteye/internal/scope"
 	"github.com/ctx42/testing/pkg/assert"
@@ -341,6 +342,23 @@ func TestRunBinaryInterrupted(t *testing.T) {
 	_, _, _, err = runBinaryMetered(ctx, sh, []string{"-c", "sleep 5"}, MaxOutputBytes)
 
 	assert.ErrorIs(t, context.Canceled, err)
+}
+
+// A running process is killed as soon as its context is cancelled (Cancel
+// all scans): the call returns well within 5 s with the context error.
+func TestRunBinaryKilledOnCancel(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("sh not available")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+
+	_, _, _, err = runBinaryMetered(ctx, sh, []string{"-c", "exec sleep 60"}, MaxOutputBytes)
+
+	assert.ErrorIs(t, context.Canceled, err)
+	assert.True(t, time.Since(start) < 5*time.Second, "took %s", time.Since(start))
 }
 
 func TestRunBinaryCapsOutput(t *testing.T) {

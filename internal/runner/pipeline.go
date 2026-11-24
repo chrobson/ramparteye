@@ -31,15 +31,17 @@ type legacyProber interface {
 // postProcess runs after every chunk of a run is finished: each HTTP(S)
 // service is fingerprinted (GET/HEAD only), signatures are matched on every
 // service, and the run is compared with the previous one (diff and host
-// states). ctx carries the run's safety meter.
-func (r *Runner) postProcess(ctx context.Context, s *session) error {
+// states). ctx carries the run's safety meter and ends only when the run is
+// cancelled: no further service is probed and the diff is not applied.
+// applied reports whether the diff of the run is applied.
+func (r *Runner) postProcess(ctx context.Context, s *session) (applied bool, err error) {
 	svcs, err := r.st.RunServices(ctx, s.runID)
 	if err != nil {
-		return fmt.Errorf("load services: %w", err)
+		return false, fmt.Errorf("load services: %w", err)
 	}
 	names, err := r.hostnames(ctx, s)
 	if err != nil {
-		return err
+		return false, err
 	}
 	eng := r.runEngine(s.meter)
 	if eng != nil {
@@ -73,17 +75,26 @@ func (r *Runner) postProcess(ctx context.Context, s *session) error {
 			}
 		})
 	}
+feed:
 	for _, svc := range svcs {
-		jobs <- svc
+		select {
+		case jobs <- svc:
+		case <-ctx.Done():
+			break feed
+		}
 	}
 	close(jobs)
 	wg.Wait()
 	s.log.Info("fingerprinting done", "services", len(svcs))
 
-	if _, err := r.st.ApplyRun(ctx, s.runID, r.cfg.Unstable, r.cfg.Now()); err != nil && !errors.Is(err, store.ErrAlreadyApplied) {
-		errs = errors.Join(errs, fmt.Errorf("apply diff: %w", err))
+	if r.cancelRequested(ctx, s) {
+		return false, errs
 	}
-	return errs
+	_, err = r.st.ApplyRun(ctx, s.runID, r.cfg.Unstable, r.cfg.Now())
+	if err != nil && !errors.Is(err, store.ErrAlreadyApplied) {
+		return false, errors.Join(errs, fmt.Errorf("apply diff: %w", err))
+	}
+	return true, errs
 }
 
 // hostnames returns the names each address of the run is known by: the

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime/debug"
 	"time"
 
 	"github.com/chrobson/ramparteye/internal/model"
@@ -18,11 +19,27 @@ import (
 // interruptReason is recorded on a chunk cut by window end, stop or shutdown.
 const interruptReason = "interrupted (window end or stop)"
 
-// worker leases chunk groups and scans them until no chunk is left or ctx
-// ends. Only store errors stop it; scan errors are recorded on the chunks.
-func (r *Runner) worker(ctx context.Context, s *session) error {
+// worker leases chunk groups and scans them until no chunk is left, ctx
+// ends or the run is cancelled (checked before every lease, so a cancel
+// request of another process is honoured at the next chunk boundary). Only
+// store errors stop it; scan errors are recorded on the chunks. A panic
+// fails the chunks the worker still holds and marks the session panicked.
+func (r *Runner) worker(ctx context.Context, s *session) (err error) {
+	var batch []store.Chunk
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Error("scan worker panicked", "panic", p, "stack", string(debug.Stack()))
+			s.panicked.Store(true)
+			r.abandon(ctx, s, batch, fmt.Sprintf("internal error: %v", p))
+			err = nil
+		}
+	}()
 	for ctx.Err() == nil {
-		batch, lerr := r.leaseBatch(ctx, s)
+		if r.cancelRequested(ctx, s) {
+			return nil
+		}
+		var lerr error
+		batch, lerr = r.leaseBatch(ctx, s)
 		for _, g := range s.partition(batch) {
 			if err := r.scanGroup(ctx, s, g); err != nil {
 				return err
@@ -39,6 +56,18 @@ func (r *Runner) worker(ctx context.Context, s *session) error {
 		}
 	}
 	return nil
+}
+
+// abandon fails the chunks of a batch whose worker panicked. Chunks already
+// settled are skipped: their lease is no longer current.
+func (r *Runner) abandon(ctx context.Context, s *session, batch []store.Chunk, reason string) {
+	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
+	defer cancel()
+	for _, c := range batch {
+		if err := r.st.FailChunk(dbctx, c, reason); err != nil && !errors.Is(err, store.ErrLeaseLost) {
+			s.log.Error("chunk of a panicked worker not settled", "chunk", c.Prefix, "err", err)
+		}
+	}
 }
 
 // leaseBatch leases chunks until they cover the address count the sizer

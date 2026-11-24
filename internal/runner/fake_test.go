@@ -43,6 +43,17 @@ type fakeStore struct {
 	countFail   map[int]bool // CountChunks call numbers (1-based) that fail
 	finishFails int          // FinishRun fails this many more times
 	applyPanic  bool         // ApplyRun panics
+	rcptPanic   bool         // SafetyReceipt panics
+
+	cancelReqs map[int64]*int64 // run id -> requested by
+	audits     []fakeAudit
+}
+
+type fakeAudit struct {
+	userID  *int64
+	action  string
+	entity  string
+	details any
 }
 
 type fakeRun struct {
@@ -62,7 +73,7 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		targets: map[int64]model.Target{}, runs: map[int64]*fakeRun{}, leases: map[int64]int{},
 		httpObs: map[int64]model.HTTPObs{}, legacy: map[int64]store.LegacyTLS{},
-		detections: map[int64][]model.Detection{},
+		detections: map[int64][]model.Detection{}, cancelReqs: map[int64]*int64{},
 	}
 }
 
@@ -81,6 +92,9 @@ func (f *fakeStore) ResetRunning(context.Context) (int64, error) {
 		}
 	}
 	for _, r := range f.runs {
+		if _, req := f.cancelReqs[r.ID]; req && !finalStatus(r.Status) {
+			r.Status = store.RunCancelled
+		}
 		if r.Status == store.RunRunning {
 			r.Status = store.RunPaused
 		}
@@ -146,6 +160,9 @@ func (f *fakeStore) OpenRuns(context.Context) ([]store.RunInfo, error) {
 	defer f.mu.Unlock()
 	var out []store.RunInfo
 	for _, r := range f.runs {
+		if _, req := f.cancelReqs[r.ID]; req {
+			continue
+		}
 		switch r.Status {
 		case store.RunQueued, store.RunRunning, store.RunPaused:
 			out = append(out, r.RunInfo)
@@ -155,16 +172,19 @@ func (f *fakeStore) OpenRuns(context.Context) ([]store.RunInfo, error) {
 	return out, nil
 }
 
-func (f *fakeStore) StartRun(_ context.Context, runID int64) error {
+func (f *fakeStore) StartRun(_ context.Context, runID int64) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := f.runs[runID]
+	if finalStatus(r.Status) {
+		return false, nil
+	}
 	r.Status = store.RunRunning
 	if r.StartedAt == nil {
 		t := time.Now()
 		r.StartedAt = &t
 	}
-	return nil
+	return true, nil
 }
 
 func (f *fakeStore) LeaseChunk(ctx context.Context, runID int64) (store.Chunk, bool, error) {
@@ -288,16 +308,64 @@ func (f *fakeStore) CountChunks(_ context.Context, runID int64) (store.ChunkCoun
 	return cc, nil
 }
 
-func (f *fakeStore) FinishRun(_ context.Context, runID int64, status string, active time.Duration) error {
+func (f *fakeStore) FinishRun(_ context.Context, runID int64, status string, active time.Duration) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.finishFails > 0 {
 		f.finishFails--
-		return errors.New("database unavailable")
+		return false, errors.New("database unavailable")
 	}
 	r := f.runs[runID]
+	if finalStatus(r.Status) {
+		return false, nil
+	}
 	r.Status = status
 	r.durationMs += active.Milliseconds()
+	return true, nil
+}
+
+func (f *fakeStore) CancelOpenRuns(_ context.Context, by *int64) ([]int64, []int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	requested, finished := []int64{}, []int64{}
+	for _, r := range f.runs {
+		switch r.Status {
+		case store.RunQueued, store.RunRunning, store.RunPaused:
+		default:
+			continue
+		}
+		requested = append(requested, r.ID)
+		if _, ok := f.cancelReqs[r.ID]; !ok {
+			f.cancelReqs[r.ID] = by
+		}
+		if r.Status != store.RunRunning {
+			r.Status = store.RunCancelled
+			finished = append(finished, r.ID)
+		}
+	}
+	sort.Slice(requested, func(i, j int) bool { return requested[i] < requested[j] })
+	sort.Slice(finished, func(i, j int) bool { return finished[i] < finished[j] })
+	return requested, finished, nil
+}
+
+func (f *fakeStore) CancelRequested(_ context.Context, runID int64) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.cancelReqs[runID]
+	return ok, nil
+}
+
+// requestCancel records a cancel request as another process would.
+func (f *fakeStore) requestCancel(runID int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cancelReqs[runID] = nil
+}
+
+func (f *fakeStore) InsertAudit(_ context.Context, userID *int64, action, entity string, details any) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.audits = append(f.audits, fakeAudit{userID: userID, action: action, entity: entity, details: details})
 	return nil
 }
 
@@ -375,6 +443,9 @@ func (f *fakeStore) SaveSafetyReceipt(_ context.Context, r safety.Receipt) error
 func (f *fakeStore) SafetyReceipt(_ context.Context, runID int64) (safety.Receipt, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.rcptPanic {
+		panic("receipt exploded")
+	}
 	out := safety.Receipt{RunID: runID}
 	found := false
 	for _, r := range f.receipts {
@@ -433,6 +504,24 @@ func (f *fakeStore) runStatus(id int64) string {
 	return f.runs[id].Status
 }
 
+func (f *fakeStore) setStatus(id int64, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.runs[id].Status = status
+}
+
+func (f *fakeStore) appliedRuns() []int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int64(nil), f.applied...)
+}
+
+func (f *fakeStore) auditLog() []fakeAudit {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeAudit(nil), f.audits...)
+}
+
 func (f *fakeStore) runCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -473,6 +562,7 @@ type fakeScanner struct {
 	ctxs      []context.Context
 	discovers int
 	services  int
+	onCall    func()        // called synchronously by every Discover
 	panics    bool          // Discover panics
 	delay     time.Duration // Discover takes this long
 	inflight  int
@@ -497,7 +587,7 @@ func (s *fakeScanner) Discover(ctx context.Context, ps []netip.Prefix, o scan.Op
 	s.ctxs = append(s.ctxs, ctx)
 	s.inflight++
 	s.maxFlight = max(s.maxFlight, s.inflight)
-	panics, delay := s.panics, s.delay
+	panics, delay, onCall := s.panics, s.delay, s.onCall
 	block, fail := false, false
 	for _, p := range ps {
 		s.opts[p] = o
@@ -514,6 +604,9 @@ func (s *fakeScanner) Discover(ctx context.Context, ps []netip.Prefix, o scan.Op
 		panic("nmap parser exploded")
 	}
 	time.Sleep(delay)
+	if onCall != nil {
+		onCall()
+	}
 	if s.started != nil {
 		s.started <- ps[0]
 	}
@@ -555,6 +648,19 @@ func (s *fakeScanner) setBlock(p netip.Prefix, v bool) {
 	s.mu.Lock()
 	s.block[p] = v
 	s.mu.Unlock()
+}
+
+// contexts returns the contexts of every Discover call.
+func (s *fakeScanner) contexts() []context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]context.Context(nil), s.ctxs...)
+}
+
+func (s *fakeScanner) discoverCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.discovers
 }
 
 func (s *fakeScanner) discoverGroups() [][]netip.Prefix {

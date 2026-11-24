@@ -69,7 +69,7 @@ func TestDeleteScanConfigKeepsFinishedRuns(t *testing.T) {
 	s, pool := newStore(t)
 	id := must.Value(s.CreateScanConfig(ctx, store.ScanConfig{Name: "a", TopPorts: 10, MaxRate: 10, Workers: 1}))
 	runID := must.Value(s.CreateRun(ctx, &id, nil))
-	assert.NoError(t, s.FinishRun(ctx, runID, store.RunDone, time.Second))
+	assert.True(t, must.Value(s.FinishRun(ctx, runID, store.RunDone, time.Second)))
 
 	assert.NoError(t, s.DeleteScanConfig(ctx, id))
 

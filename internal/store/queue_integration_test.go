@@ -55,7 +55,7 @@ func TestResetRunningIsGlobal(t *testing.T) {
 	a := must.Value(s.CreateRun(ctx, nil, []netip.Prefix{netip.MustParsePrefix("10.20.0.0/24")}))
 	b := must.Value(s.CreateRun(ctx, nil, []netip.Prefix{netip.MustParsePrefix("10.20.1.0/24")}))
 	for _, id := range []int64{a, b} {
-		assert.NoError(t, s.StartRun(ctx, id))
+		assert.True(t, must.Value(s.StartRun(ctx, id)))
 		_, ok, err := s.LeaseChunk(ctx, id)
 		assert.NoError(t, err)
 		assert.True(t, ok)

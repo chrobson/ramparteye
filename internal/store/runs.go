@@ -147,37 +147,48 @@ func (s *Store) LastRun(ctx context.Context, configID int64) (*RunInfo, error) {
 	return &r, nil
 }
 
-// OpenRuns lists scan runs that are not finished and not stopped by a user.
+// OpenRuns lists scan runs that are not finished, not stopped by a user and
+// not cancelled (no cancel request), so a cancelled run is never resumed.
 func (s *Store) OpenRuns(ctx context.Context) ([]RunInfo, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+runInfoCols+` FROM scan_runs
-		WHERE kind = 'scan' AND status IN ('queued', 'running', 'paused') AND NOT stopped ORDER BY id`)
+	rows, err := s.db.Query(ctx, `SELECT `+runInfoCols+` FROM scan_runs r
+		WHERE kind = 'scan' AND status IN ('queued', 'running', 'paused') AND NOT stopped
+		AND NOT EXISTS (SELECT 1 FROM run_cancel_requests c WHERE c.run_id = r.id) ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	return collect(rows, func(r pgx.Rows) (RunInfo, error) { return scanRunInfo(r) })
 }
 
-// StartRun marks a run running; started_at keeps the first start.
-func (s *Store) StartRun(ctx context.Context, runID int64) error {
-	_, err := s.db.Exec(ctx, `UPDATE scan_runs SET status = 'running',
-		started_at = coalesce(started_at, now()), finished_at = NULL WHERE id = $1`, runID)
-	return err
+// notFinal matches a run whose status is not final yet: a done, failed or
+// cancelled run is never changed again.
+const notFinal = ` AND status NOT IN ('done', 'failed', 'cancelled')`
+
+// StartRun marks a run running; started_at keeps the first start. It
+// reports false (and changes nothing) when the run already has a final
+// status.
+func (s *Store) StartRun(ctx context.Context, runID int64) (bool, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE scan_runs SET status = 'running',
+		started_at = coalesce(started_at, now()), finished_at = NULL WHERE id = $1`+notFinal, runID)
+	return tag.RowsAffected() == 1, err
 }
 
 // FinishRun sets the final (or paused) status of a run and adds the active
 // scanning time of this session to duration_ms, so a run paused by its
-// window reports only the time actually spent scanning.
-func (s *Store) FinishRun(ctx context.Context, runID int64, status string, active time.Duration) error {
-	_, err := s.db.Exec(ctx, `UPDATE scan_runs SET status = $2,
+// window reports only the time actually spent scanning. A final status is
+// never overwritten: it reports false (and changes nothing) when the run
+// is already done, failed or cancelled.
+func (s *Store) FinishRun(ctx context.Context, runID int64, status string, active time.Duration) (bool, error) {
+	tag, err := s.db.Exec(ctx, `UPDATE scan_runs SET status = $2,
 		duration_ms = coalesce(duration_ms, 0) + $3,
 		finished_at = CASE WHEN $2 IN ('done', 'failed', 'cancelled') THEN now() ELSE NULL END
-		WHERE id = $1`, runID, status, active.Milliseconds())
-	return err
+		WHERE id = $1`+notFinal, runID, status, active.Milliseconds())
+	return tag.RowsAffected() == 1, err
 }
 
 // ResetRunning is called on startup: chunks left running by a crashed
 // process go back to pending and their runs become paused so the scheduler
-// resumes them. It returns the number of chunks reset.
+// resumes them; unfinished runs with a cancel request become cancelled
+// instead. It returns the number of chunks reset.
 //
 // It is global and assumes a single scanning process per database: it must
 // run only when no other process executes scans (`serve` calls it once at
@@ -192,6 +203,11 @@ func (s *Store) ResetRunning(ctx context.Context) (int64, error) {
 			return err
 		}
 		n = tag.RowsAffected()
+		if _, err := tx.db.Exec(ctx, `UPDATE scan_runs r SET status = 'cancelled', finished_at = now()
+			WHERE status IN ('queued', 'running', 'paused')
+			AND EXISTS (SELECT 1 FROM run_cancel_requests c WHERE c.run_id = r.id)`); err != nil {
+			return err
+		}
 		_, err = tx.db.Exec(ctx, `UPDATE scan_runs SET status = 'paused' WHERE status = 'running'`)
 		return err
 	})
@@ -228,4 +244,52 @@ func (s *Store) CancelRequested(ctx context.Context, runID int64) (bool, error) 
 	err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM run_cancel_requests WHERE run_id = $1)`,
 		runID).Scan(&ok)
 	return ok, err
+}
+
+// CancelOpenRuns records a cancel request (by may be nil) for every
+// unfinished scan run, stopped ones included, and marks the runs that are
+// not running cancelled at once. A running run is left to the process
+// executing it, which honours the request at its next chunk boundary. It
+// returns the ids of every run a cancel was requested for and of the runs
+// it marked cancelled, both ascending.
+func (s *Store) CancelOpenRuns(ctx context.Context, by *int64) (requested, finished []int64, err error) {
+	err = s.InTx(ctx, func(tx *Store) error {
+		rows, err := tx.db.Query(ctx, `SELECT id, status FROM scan_runs
+			WHERE kind = 'scan' AND status IN ('queued', 'running', 'paused') ORDER BY id FOR UPDATE`)
+		if err != nil {
+			return err
+		}
+		type open struct {
+			id     int64
+			status string
+		}
+		runs, err := collect(rows, func(r pgx.Rows) (open, error) {
+			var o open
+			err := r.Scan(&o.id, &o.status)
+			return o, err
+		})
+		if err != nil {
+			return err
+		}
+		requested, finished = []int64{}, []int64{}
+		for _, o := range runs {
+			requested = append(requested, o.id)
+			if o.status != RunRunning {
+				finished = append(finished, o.id)
+			}
+		}
+		if len(requested) == 0 {
+			return nil
+		}
+		if err := tx.RequestCancel(ctx, requested, by); err != nil {
+			return err
+		}
+		_, err = tx.db.Exec(ctx, `UPDATE scan_runs SET status = 'cancelled', finished_at = now()
+			WHERE id = ANY($1)`, finished)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return requested, finished, nil
 }

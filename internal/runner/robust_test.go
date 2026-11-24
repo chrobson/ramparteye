@@ -77,10 +77,11 @@ func TestCountChunksErrorAtEndPausesRun(t *testing.T) {
 }
 
 // When FinishRun fails the run stays running in the database. The finished
-// event is still published, OnRunDone waits, and the next tick resumes the
-// run instead of taking it for a run of another process.
-func TestFinishRunErrorResumedByTick(t *testing.T) {
-	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+// event is still published, OnRunDone waits, and the next tick retries the
+// stored status without executing the run again (no second scan or
+// fingerprinting) instead of taking it for a run of another process.
+func TestFinishRunErrorRetriedByTick(t *testing.T) {
+	f, _ := pipelineFixture(t, headerSig)
 	h := &hookRecorder{}
 	f.r.OnRunDone = h.hook
 	f.fs.finishFails = 1
@@ -90,6 +91,8 @@ func TestFinishRunErrorResumedByTick(t *testing.T) {
 	assert.Equal(t, EventFinished, last.Kind)
 	assert.Contain(t, "status not saved", last.Message)
 	assert.Len(t, 0, h.got())
+	assert.True(t, f.r.isStale(runID))
+	discovers, probes := f.sc.discoverCount(), len(f.fp.endpoints())
 
 	f.r.Tick(context.Background(), time.Now())
 	f.r.Wait()
@@ -97,6 +100,84 @@ func TestFinishRunErrorResumedByTick(t *testing.T) {
 	assert.Equal(t, []string{store.RunDone}, h.got())
 	assert.Equal(t, 1, f.fs.runCount())
 	assert.False(t, f.r.isStale(runID))
+	assert.Equal(t, discovers, f.sc.discoverCount())
+	assert.Equal(t, probes, len(f.fp.endpoints()))
+	assert.Equal(t, []int64{runID}, f.fs.appliedRuns())
+}
+
+// A stale run of a disabled (or out-of-window) profile is still retried.
+func TestStaleRunOfDisabledProfileRetried(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	h := &hookRecorder{}
+	f.r.OnRunDone = h.hook
+	f.fs.finishFails = 1
+	runID := f.runNow(t)
+	f.fs.configs[0].Enabled = false
+
+	f.r.Tick(context.Background(), time.Now())
+	f.r.Wait()
+	assert.Equal(t, store.RunDone, f.fs.runStatus(runID))
+	assert.Equal(t, []string{store.RunDone}, h.got())
+}
+
+// A stale run occupies its profile: no second run is started by Start or
+// by the scheduler while its status is not stored.
+func TestStaleRunOccupiesProfile(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	f.fs.configs[0].EveryMinutes = ptr(1)
+	f.fs.finishFails = 1
+	runID := f.runNow(t)
+
+	_, err := f.r.Start(context.Background(), f.cfg.ID)
+	assert.ErrorIs(t, ErrAlreadyRunning, err)
+	f.fs.finishFails = 1 // the retry fails too
+	f.r.Tick(context.Background(), time.Now().Add(time.Hour))
+	f.r.Wait()
+	assert.Equal(t, 1, f.fs.runCount())
+	assert.True(t, f.r.isStale(runID))
+}
+
+// A panic while finishing, before the status is stored, leaves the run
+// stale (not running and invisible): the next tick stores its status.
+func TestFinishPanicMarksStale(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	h := &hookRecorder{}
+	f.r.OnRunDone = h.hook
+	f.fs.rcptPanic = true
+	runID, events := startCollect(t, f)
+	assert.Equal(t, store.RunRunning, f.fs.runStatus(runID))
+	assert.True(t, f.r.isStale(runID))
+	assert.Equal(t, EventFinished, events[len(events)-1].Kind)
+	assert.Len(t, 0, h.got())
+
+	f.fs.mu.Lock()
+	f.fs.rcptPanic = false
+	f.fs.mu.Unlock()
+	f.r.Tick(context.Background(), time.Now())
+	f.r.Wait()
+	assert.Equal(t, store.RunDone, f.fs.runStatus(runID))
+	assert.Equal(t, []string{store.RunDone}, h.got())
+	assert.Equal(t, 1, f.sc.discoverCount())
+}
+
+// A stale paused run with a cancel request is stored cancelled.
+func TestStalePausedRunCancelled(t *testing.T) {
+	f := setup(t, model.Target{Kind: model.TargetCIDR, Value: "10.20.0.0/24"})
+	h := &hookRecorder{}
+	f.r.OnRunDone = h.hook
+	runID := startBlocked(t, f)
+	f.fs.mu.Lock()
+	f.fs.finishFails = 1
+	f.fs.mu.Unlock()
+	f.r.Stop(runID)
+	f.r.Wait()
+	assert.True(t, f.r.isStale(runID))
+	f.fs.requestCancel(runID)
+
+	f.r.Tick(context.Background(), time.Now())
+	f.r.Wait()
+	assert.Equal(t, store.RunCancelled, f.fs.runStatus(runID))
+	assert.Equal(t, []string{store.RunCancelled}, h.got())
 }
 
 // A panicking scanner fails the run instead of the process: the run is
@@ -112,6 +193,10 @@ func TestScannerPanicFailsRun(t *testing.T) {
 	assert.Equal(t, 1.0, last.Progress)
 	assert.Contain(t, "internal error", last.Message)
 	assert.Equal(t, []string{store.RunFailed}, h.got())
+	// The chunks the panicking workers held are settled, not left running.
+	for _, c := range f.fs.chunksOf(runID) {
+		assert.Equal(t, store.ChunkFailed, c.status)
+	}
 }
 
 // A panicking prober costs only its service: the run is done, its other

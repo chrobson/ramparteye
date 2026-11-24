@@ -18,8 +18,8 @@ const subscriberBuffer = 64
 const scanShare = 0.9
 
 // Event reports what a run is doing. Progress grows monotonically per run
-// and is 1.0 only on the finished event of a done or failed run. PPS is the
-// run's measured nmap packet rate so far.
+// and is 1.0 only on the finished event of a final (done, failed or
+// cancelled) run. PPS is the run's measured nmap packet rate so far.
 type Event struct {
 	RunID    int64
 	Kind     string
