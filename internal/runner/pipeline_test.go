@@ -2,16 +2,26 @@ package runner
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
+	"net/url"
+	"slices"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ctx42/testing/pkg/assert"
 	"github.com/ctx42/testing/pkg/must"
 
+	"github.com/chrobson/ramparteye/internal/httpfp"
 	"github.com/chrobson/ramparteye/internal/model"
+	"github.com/chrobson/ramparteye/internal/scan"
+	"github.com/chrobson/ramparteye/internal/scope"
 	"github.com/chrobson/ramparteye/internal/sig"
+	"github.com/chrobson/ramparteye/internal/store"
 )
 
 const headerSig = `id: test-nginx
@@ -81,14 +91,101 @@ func TestPipelineFingerprintsMatchesAndDiffs(t *testing.T) {
 		assert.Equal(t, svc.ID, d.ServiceID)
 		ids = append(ids, d.SignatureID)
 	}
-	assert.Equal(t, []string{"test-nginx", "test-status"}, ids)
-	assert.Equal(t, 1, ff.calls)
+	// Without an *httpfp.HTTPProber path probes are disabled: the engine's
+	// own fetcher is never used.
+	assert.Equal(t, []string{"test-nginx"}, ids)
+	assert.Equal(t, 0, ff.calls)
 	assert.Equal(t, []int64{runID}, f.fs.applied)
 	// The prober received the endpoint nmap reported.
 	eps := f.fp.endpoints()
 	assert.Len(t, 1, eps)
 	assert.Equal(t, "http", eps[0].Scheme)
 	assert.Equal(t, svc.Key, eps[0].Key)
+}
+
+// staticScanner reports fixed services; their hosts are live.
+type staticScanner struct{ svcs []model.ServiceObs }
+
+func (s staticScanner) Discover(_ context.Context, ps []netip.Prefix, _ scan.Opts) (scan.Result, error) {
+	res := scan.Result{Runs: []scan.Run{run(ps)}}
+	for _, sv := range s.svcs {
+		for _, p := range ps {
+			if p.Contains(sv.Key.IP) {
+				res.Hosts = append(res.Hosts, model.HostObs{IP: sv.Key.IP, Up: true})
+			}
+		}
+	}
+	return res, nil
+}
+
+func (s staticScanner) Services(_ context.Context, hosts []netip.Addr, _ scan.Opts) (scan.Result, error) {
+	res := scan.Result{}
+	for _, sv := range s.svcs {
+		if slices.Contains(hosts, sv.Key.IP) {
+			res.Services = append(res.Services, sv)
+		}
+	}
+	return res, nil
+}
+
+// realFixture scans 127.0.0.1 with a real scoped httpfp.HTTPProber against
+// an httptest server whose /status page matches pathSig. hits counts
+// requests to /status.
+func realFixture(t *testing.T, yamls ...string) (*Runner, *fakeStore, *atomic.Int32) {
+	t.Helper()
+	hits := &atomic.Int32{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/status" {
+			hits.Add(1)
+			_, _ = w.Write([]byte("all good"))
+			return
+		}
+		w.Header().Set("Server", "nginx/1.27.3")
+		_, _ = w.Write([]byte("<title>Welcome</title>"))
+	}))
+	t.Cleanup(srv.Close)
+	u := must.Value(url.Parse(srv.URL))
+	port := must.Value(strconv.Atoi(u.Port()))
+	ip := netip.MustParseAddr("127.0.0.1")
+
+	sc := must.Value(scope.New([]netip.Prefix{pfx("127.0.0.0/8")}, nil, nil))
+	fs := newFakeStore()
+	fs.targets[1] = model.Target{ID: 1, Kind: model.TargetIP, Value: ip.String()}
+	fs.configs = []store.ScanConfig{{ID: 1, Name: "local", TopPorts: 100, MaxRate: 1000, Workers: 1,
+		Enabled: true, TargetIDs: []int64{1}}}
+	scanner := staticScanner{svcs: []model.ServiceObs{{Key: model.AssetKey{IP: ip, Port: uint16(port), Proto: "tcp"},
+		Product: "nginx", Banner: "http"}}}
+	prober := httpfp.New(httpfp.Options{Scope: sc, SkipFavicon: true})
+	r := New(fs, scanner, prober, engine(t, nil, yamls...), sc, Config{Log: quiet, RetryBackoff: time.Millisecond})
+	return r, fs, hits
+}
+
+func runRealNow(t *testing.T, r *Runner) int64 {
+	t.Helper()
+	id := must.Value(r.Start(context.Background(), 1))
+	r.Wait()
+	return id
+}
+
+// With a real prober, signature path probes go through the run's prober:
+// they reach the service and are counted in the run's safety receipt.
+func TestPipelineRealProberPathProbe(t *testing.T) {
+	r, fs, hits := realFixture(t, headerSig, pathSig)
+	runID := runRealNow(t, r)
+
+	assert.Equal(t, int32(1), hits.Load())
+	var ids []string
+	for _, ds := range fs.detections {
+		for _, d := range ds {
+			ids = append(ids, d.SignatureID)
+		}
+	}
+	assert.Equal(t, []string{"test-nginx", "test-status"}, ids)
+	rc := total(t, fs, runID)
+	assert.Equal(t, int64(1), rc.PathProbes)
+	assert.Equal(t, int64(1), rc.PathProbeWebServices)
+	assert.True(t, rc.HTTPGet >= 2) // the page and the path probe, metered by the transport
+	assert.Equal(t, int64(0), rc.HTTPOther)
 }
 
 // Domain targets resolving to the address are probed as virtual hosts;

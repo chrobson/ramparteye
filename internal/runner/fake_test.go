@@ -38,6 +38,11 @@ type fakeStore struct {
 	probes     map[netip.Addr]int
 	sigRows    []store.SignatureRow
 	synced     int
+
+	countCalls  int
+	countFail   map[int]bool // CountChunks call numbers (1-based) that fail
+	finishFails int          // FinishRun fails this many more times
+	applyPanic  bool         // ApplyRun panics
 }
 
 type fakeRun struct {
@@ -260,6 +265,10 @@ func (f *fakeStore) FailChunk(_ context.Context, c store.Chunk, reason string) e
 func (f *fakeStore) CountChunks(_ context.Context, runID int64) (store.ChunkCounts, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.countCalls++
+	if f.countFail[f.countCalls] {
+		return store.ChunkCounts{}, errors.New("database unavailable")
+	}
 	var cc store.ChunkCounts
 	for _, c := range f.chunks {
 		if c.RunID != runID {
@@ -282,6 +291,10 @@ func (f *fakeStore) CountChunks(_ context.Context, runID int64) (store.ChunkCoun
 func (f *fakeStore) FinishRun(_ context.Context, runID int64, status string, active time.Duration) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.finishFails > 0 {
+		f.finishFails--
+		return errors.New("database unavailable")
+	}
 	r := f.runs[runID]
 	r.Status = status
 	r.durationMs += active.Milliseconds()
@@ -336,6 +349,9 @@ func (f *fakeStore) ReplaceDetections(_ context.Context, serviceID int64, ds []m
 func (f *fakeStore) ApplyRun(_ context.Context, runID int64, _ diff.Config, _ time.Time) (store.ApplyResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.applyPanic {
+		panic("apply exploded")
+	}
 	for _, id := range f.applied {
 		if id == runID {
 			return store.ApplyResult{}, store.ErrAlreadyApplied
@@ -457,6 +473,10 @@ type fakeScanner struct {
 	ctxs      []context.Context
 	discovers int
 	services  int
+	panics    bool          // Discover panics
+	delay     time.Duration // Discover takes this long
+	inflight  int
+	maxFlight int // most concurrent Discover calls
 }
 
 func newFakeScanner() *fakeScanner {
@@ -475,6 +495,9 @@ func (s *fakeScanner) Discover(ctx context.Context, ps []netip.Prefix, o scan.Op
 	s.rates = append(s.rates, o.MaxRate)
 	s.groups = append(s.groups, append([]netip.Prefix(nil), ps...))
 	s.ctxs = append(s.ctxs, ctx)
+	s.inflight++
+	s.maxFlight = max(s.maxFlight, s.inflight)
+	panics, delay := s.panics, s.delay
 	block, fail := false, false
 	for _, p := range ps {
 		s.opts[p] = o
@@ -482,6 +505,15 @@ func (s *fakeScanner) Discover(ctx context.Context, ps []netip.Prefix, o scan.Op
 		fail = fail || s.fail[p]
 	}
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.inflight--
+		s.mu.Unlock()
+	}()
+	if panics {
+		panic("nmap parser exploded")
+	}
+	time.Sleep(delay)
 	if s.started != nil {
 		s.started <- ps[0]
 	}
@@ -537,6 +569,7 @@ type fakeProber struct {
 	mu        sync.Mutex
 	obs       model.HTTPObs
 	block     bool
+	panics    bool
 	timeout   time.Duration
 	calls     []model.Endpoint
 	deadlines []time.Duration // deadline minus call time
@@ -550,7 +583,11 @@ func (p *fakeProber) Probe(ctx context.Context, ep model.Endpoint) (model.HTTPOb
 	}
 	block := p.block
 	o := p.obs
+	panics := p.panics
 	p.mu.Unlock()
+	if panics {
+		panic("title parser exploded")
+	}
 	if block {
 		<-ctx.Done()
 		return model.HTTPObs{ServiceID: ep.ServiceID}, ctx.Err()

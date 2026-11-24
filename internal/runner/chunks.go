@@ -91,7 +91,7 @@ func (r *Runner) scanGroup(ctx context.Context, s *session, chunks []store.Chunk
 	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
 	defer cancel()
 	if ctx.Err() != nil {
-		return r.settle(dbctx, s, chunks, ctx.Err(), true)
+		return r.settle(ctx, dbctx, s, chunks, ctx.Err(), true)
 	}
 	prefixes := make([]netip.Prefix, len(chunks))
 	for i, c := range chunks {
@@ -111,7 +111,7 @@ func (r *Runner) scanGroup(ctx context.Context, s *session, chunks []store.Chunk
 			}
 			return nil
 		}
-		return r.settle(dbctx, s, chunks, err, interrupted)
+		return r.settle(ctx, dbctx, s, chunks, err, interrupted)
 	}
 	addrs := CountAddrs(prefixes)
 	s.sizer.Observe(int(min(addrs, 1<<31)), dur)
@@ -162,8 +162,8 @@ func firstName(names []string) string {
 
 // settle records a scan error on each chunk: an interruption returns it to
 // pending with its attempt refunded; a scope refusal or the last attempt
-// fails it; anything else returns it to pending for a retry.
-func (r *Runner) settle(dbctx context.Context, s *session, chunks []store.Chunk, cause error, interrupted bool) error {
+// fails it; anything else returns it to pending for a retry after a backoff.
+func (r *Runner) settle(ctx, dbctx context.Context, s *session, chunks []store.Chunk, cause error, interrupted bool) error {
 	for _, c := range chunks {
 		var err error
 		switch {
@@ -174,6 +174,7 @@ func (r *Runner) settle(dbctx context.Context, s *session, chunks []store.Chunk,
 			err = r.st.FailChunk(dbctx, c, cause.Error())
 		default:
 			s.log.Warn("chunk scan failed, will retry", "chunk", c.Prefix, "attempt", c.Attempts, "err", cause)
+			r.backoff(ctx, c.Attempts)
 			err = r.st.ReleaseChunk(dbctx, c, cause.Error())
 		}
 		if errors.Is(err, store.ErrLeaseLost) {
@@ -188,6 +189,20 @@ func (r *Runner) settle(dbctx context.Context, s *session, chunks []store.Chunk,
 	return nil
 }
 
+// backoff waits before a failed chunk is released for its next attempt:
+// RetryBackoff doubled per attempt, capped at maxRetryBackoff. The worker
+// keeps the lease meanwhile, so no other worker retries the chunk earlier.
+// It returns early when ctx ends.
+func (r *Runner) backoff(ctx context.Context, attempt int) {
+	d := r.cfg.RetryBackoff << min(max(attempt-1, 0), 16)
+	t := time.NewTimer(min(d, maxRetryBackoff))
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+	case <-t.C:
+	}
+}
+
 // chunkSettled persists the receipt delta and publishes progress after a
 // group was settled.
 func (r *Runner) chunkSettled(dbctx context.Context, s *session) {
@@ -196,6 +211,7 @@ func (r *Runner) chunkSettled(dbctx context.Context, s *session) {
 	}
 	counts, err := r.st.CountChunks(dbctx, s.runID)
 	if err != nil {
+		s.log.Warn("progress unknown", "err", err)
 		return
 	}
 	r.publish(Event{RunID: s.runID, Kind: EventProgress, Progress: s.progress(counts), PPS: int(s.meter.Snapshot().PPS)})
@@ -241,12 +257,13 @@ func (r *Runner) saveSafety(ctx context.Context, s *session) error {
 	return nil
 }
 
-// saveSafetyFinal saves the last delta of a session, retrying a few times.
-func (r *Runner) saveSafetyFinal(ctx context.Context, s *session) {
+// saveSafetyFinal saves the last delta of a session, retrying a few times;
+// false when it could not be saved (the stored receipt is incomplete).
+func (r *Runner) saveSafetyFinal(ctx context.Context, s *session) bool {
 	var err error
 	for attempt := range 3 {
 		if err = r.saveSafety(ctx, s); err == nil {
-			return
+			return true
 		}
 		select {
 		case <-ctx.Done():
@@ -256,4 +273,5 @@ func (r *Runner) saveSafetyFinal(ctx context.Context, s *session) {
 		break
 	}
 	s.log.Error("safety receipt delta not saved", "err", err)
+	return false
 }

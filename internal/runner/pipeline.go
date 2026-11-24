@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync"
@@ -61,7 +62,7 @@ func (r *Runner) postProcess(ctx context.Context, s *session) error {
 	for range r.cfg.ProbeWorkers {
 		wg.Go(func() {
 			for svc := range jobs {
-				if err := r.service(ctx, s, eng, svc, names[svc.Key.IP]); err != nil {
+				if err := r.safeService(ctx, s, eng, svc, names[svc.Key.IP]); err != nil {
 					mu.Lock()
 					errs = errors.Join(errs, fmt.Errorf("%s:%d: %w", svc.Key.IP, svc.Key.Port, err))
 					mu.Unlock()
@@ -105,20 +106,38 @@ func (r *Runner) hostnames(ctx context.Context, s *session) (map[netip.Addr][]st
 }
 
 // runEngine returns a copy of the shared engine for one run: its path
-// probes use the run's HTTP prober and go through the run's per-host probe
-// budget. nil when there is no engine.
+// probes use the run's scoped HTTP prober and go through the run's per-host
+// probe budget. Without an *httpfp.HTTPProber path probes are disabled
+// (never sent through any other fetcher). nil when there is no engine.
 func (r *Runner) runEngine(m *safety.Meter) *sig.Engine {
 	if r.eng == nil {
 		return nil
 	}
-	f := r.eng.Fetcher
+	var f sig.Fetcher
 	if hp, ok := r.fp.(*httpfp.HTTPProber); ok {
 		f = sig.NewHTTPFetcher(hp)
+	} else {
+		r.noFetch.Do(func() {
+			r.cfg.Log.Warn("path probes disabled: the HTTP prober is not an httpfp.HTTPProber")
+		})
 	}
 	e := sig.NewEngine(r.eng.Signatures(), f)
 	e.ProbeTimeout = r.eng.ProbeTimeout
 	e.ProbeGate = func(h netip.Addr) bool { return m.ProbeGate(h.Unmap().WithZone("")) }
 	return e
+}
+
+// safeService runs service and turns a panic into an error for that
+// service, so one hostile response cannot take down the run.
+func (r *Runner) safeService(ctx context.Context, s *session, eng *sig.Engine, svc model.ServiceObs, vhosts []string) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Error("service post-processing panicked", "service", svc.Key.IP, "port", svc.Key.Port,
+				"panic", p, "stack", string(debug.Stack()))
+			err = fmt.Errorf("internal error: %v", p)
+		}
+	}()
+	return r.service(ctx, s, eng, svc, vhosts)
 }
 
 // service fingerprints one service, matches the signatures on it and its

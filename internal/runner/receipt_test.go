@@ -69,27 +69,27 @@ func TestReceiptRestoredAfterFailedSave(t *testing.T) {
 // before evaluating, web services are counted, and probes spent by earlier
 // sessions of the run (resume) count against the per-host budget.
 func TestReceiptPathProbes(t *testing.T) {
-	f, ff := pipelineFixture(t, headerSig, pathSig)
-	f.r.cfg.PathProbesPerHost = 1
-	runID := f.runNow(t)
-	rc := total(t, f.fs, runID)
+	r, fs, hits := realFixture(t, headerSig, pathSig)
+	r.cfg.PathProbesPerHost = 1
+	runID := runRealNow(t, r)
+	rc := total(t, fs, runID)
 	assert.True(t, rc.PathProbeSignaturesKnown)
 	assert.Equal(t, 1, rc.PathProbeSignatures)
 	assert.Equal(t, int64(1), rc.PathProbeWebServices)
 	assert.Equal(t, int64(1), rc.PathProbes)
 	assert.Equal(t, 1, rc.PathProbeBudget)
-	assert.Equal(t, 1, ff.calls)
+	assert.Equal(t, int32(1), hits.Load())
 
 	// Resumed run whose host already spent its budget: the probe is refused.
-	f, ff = pipelineFixture(t, headerSig, pathSig)
-	f.r.cfg.PathProbesPerHost = 1
-	f.fs.probes = map[netip.Addr]int{netip.MustParseAddr("10.20.0.10"): 1}
-	runID = f.runNow(t)
-	rc = total(t, f.fs, runID)
+	r, fs, hits = realFixture(t, headerSig, pathSig)
+	r.cfg.PathProbesPerHost = 1
+	fs.probes = map[netip.Addr]int{netip.MustParseAddr("127.0.0.1"): 1}
+	runID = runRealNow(t, r)
+	rc = total(t, fs, runID)
 	assert.Equal(t, int64(0), rc.PathProbes)
 	assert.Equal(t, int64(1), rc.PathProbesRefused)
-	assert.Equal(t, 0, ff.calls)
-	for _, ds := range f.fs.detections {
+	assert.Equal(t, int32(0), hits.Load())
+	for _, ds := range fs.detections {
 		for _, d := range ds {
 			assert.NotEqual(t, "test-status", d.SignatureID)
 		}

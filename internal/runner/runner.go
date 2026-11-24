@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"runtime/debug"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chrobson/ramparteye/internal/diff"
@@ -71,6 +73,9 @@ const DefaultMaxAttempts = 3
 // maxGroupChunks bounds how many chunks one worker scans in one group.
 const maxGroupChunks = 64
 
+// maxRetryBackoff caps the wait before a failed chunk is retried.
+const maxRetryBackoff = 30 * time.Second
+
 // dbTimeout bounds the writes that must survive a cancelled run context
 // (window end, stop, shutdown).
 const dbTimeout = 15 * time.Second
@@ -99,6 +104,9 @@ type Config struct {
 	AllPortsMaxAddrs int
 	ChunkBits        int // IPv4 chunk prefix length, default 24
 	MaxAttempts      int // default 3
+	// RetryBackoff is the wait before a failed chunk's second attempt,
+	// doubled per further attempt and capped at 30 s (default 1 s).
+	RetryBackoff time.Duration
 	// GroupTarget is the desired duration of one nmap group (default 90 s).
 	GroupTarget time.Duration
 	Resolver    target.Resolver // domain targets; nil = system resolver
@@ -124,6 +132,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.MaxAttempts <= 0 {
 		c.MaxAttempts = DefaultMaxAttempts
+	}
+	if c.RetryBackoff <= 0 {
+		c.RetryBackoff = time.Second
 	}
 	if c.ExtraPorts == nil {
 		c.ExtraPorts = scan.DefaultExtraPorts
@@ -168,6 +179,8 @@ type Runner struct {
 	active   map[int64]*activeRun // by run id
 	starting map[int64]bool       // profile ids with a run being created
 	ended    map[int64]bool       // runs whose OnRunDone was called
+	stale    map[int64]bool       // runs left running because FinishRun failed
+	noFetch  sync.Once            // warns once that path probes are disabled
 	wg       sync.WaitGroup
 
 	events broker
@@ -277,6 +290,7 @@ type session struct {
 	perWorker int
 	total     int // chunks of the run
 	log       *slog.Logger
+	panicked  atomic.Bool // a worker panicked: the run fails
 }
 
 // optsFor returns the scan options of a chunk. The auto profile is decided
@@ -341,28 +355,57 @@ func (r *Runner) newSession(ctx context.Context, runID int64, cfg store.ScanConf
 // zero for a manual run.
 func (r *Runner) execute(ctx context.Context, runID int64, cfg store.ScanConfig, scheduled time.Time) {
 	started := r.cfg.Now()
+	var s *session
+	settled := false
+	settle := func(status, msg string) {
+		settled = true
+		r.finish(ctx, s, runID, status, r.cfg.Now().Sub(started), msg)
+	}
+	// A panic anywhere in the run (store, pipeline, a worker) fails the run
+	// instead of the process; the run still gets its finished event and
+	// OnRunDone.
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+		r.cfg.Log.Error("scan run panicked", "run", runID, "panic", p, "stack", string(debug.Stack()))
+		if !settled {
+			settle(store.RunFailed, fmt.Sprintf("%s; internal error: %v", store.RunFailed, p))
+		}
+	}()
+
 	s, err := r.newSession(ctx, runID, cfg, scheduled)
 	if err != nil {
 		r.cfg.Log.Error("scan run cannot start", "run", runID, "profile", cfg.Name, "err", err)
-		r.finish(ctx, nil, runID, store.RunFailed, 0, err.Error())
+		s = nil
+		settle(store.RunFailed, store.RunFailed+"; "+err.Error())
 		return
 	}
 	ctx = safety.WithMeter(ctx, s.meter)
+	// When the outcome cannot be read, the run is saved as paused (best
+	// effort) so the scheduler resumes it; it is never left running.
 	if err := r.st.StartRun(ctx, runID); err != nil {
 		s.log.Error("scan run not started", "err", err)
+		settle(store.RunPaused, store.RunPaused+"; start: "+err.Error())
 		return
 	}
 	counts, err := r.st.CountChunks(ctx, runID)
 	if err != nil {
 		s.log.Error("scan run not started", "err", err)
+		settle(store.RunPaused, store.RunPaused+"; count chunks: "+err.Error())
 		return
 	}
 	s.total = counts.Pending + counts.Running + counts.Done + counts.Failed
 	// More workers than chunks would only idle while taking a share of the
-	// rate, so a single-address run gets the whole rate.
+	// rate, so a single-address run gets the whole rate; more workers than
+	// packets/s would exceed the rate at 1 packet/s each.
 	k := max(cfg.Workers, 1)
 	if n := counts.Pending; n > 0 && n < k {
 		k = n
+	}
+	if rate := s.small.MaxRate; rate > 0 && k > rate {
+		k = rate
 	}
 	s.perWorker = PerWorkerRate(s.small.MaxRate, k)
 	s.small.MaxRate, s.large.MaxRate = s.perWorker, s.perWorker
@@ -373,18 +416,29 @@ func (r *Runner) execute(ctx context.Context, runID int64, cfg store.ScanConfig,
 	var wg sync.WaitGroup
 	for range k {
 		wg.Go(func() {
+			defer func() {
+				if p := recover(); p != nil {
+					s.log.Error("scan worker panicked", "panic", p, "stack", string(debug.Stack()))
+					s.panicked.Store(true)
+				}
+			}()
 			if err := r.worker(ctx, s); err != nil {
 				s.log.Error("scan worker stopped", "err", err)
 			}
 		})
 	}
 	wg.Wait()
+	if s.panicked.Load() {
+		settle(store.RunFailed, store.RunFailed+"; internal error in a scan worker")
+		return
+	}
 
 	// Persist the outcome even when ctx is already done.
 	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
 	defer cancel()
 	if counts, err = r.st.CountChunks(dbctx, runID); err != nil {
 		s.log.Error("scan run outcome unknown", "err", err)
+		settle(store.RunPaused, store.RunPaused+"; count chunks: "+err.Error())
 		return
 	}
 	status := RunStatus(counts)
@@ -397,18 +451,29 @@ func (r *Runner) execute(ctx context.Context, runID int64, cfg store.ScanConfig,
 			msg = status + "; post-processing: " + err.Error()
 		}
 	}
-	r.finish(ctx, s, runID, status, r.cfg.Now().Sub(started), msg)
+	settle(status, msg)
 }
 
-// finish saves the session's last receipt delta, stores the run status,
-// publishes the finished event and calls OnRunDone for a final status.
+// finish saves the session's last receipt delta (s may be nil), stores the
+// run status, publishes the finished event and calls OnRunDone for a final
+// status. The finished event is always published. When the status cannot be
+// stored, the run stays running in the database: it is remembered as stale
+// so Tick resumes it instead of taking it for a run of another process, and
+// OnRunDone waits for the status to be stored.
+//
+// A crash between FinishRun and OnRunDone loses the hook call for that run
+// (the run is final and never resumed); persisting "hook delivered" is left
+// to the hook's consumers (Tasks 15/18).
 func (r *Runner) finish(ctx context.Context, s *session, runID int64, status string, active time.Duration, msg string) {
 	dbctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), dbTimeout)
 	defer cancel()
 	log := r.cfg.Log.With("run", runID)
+	e := Event{RunID: runID, Kind: EventFinished}
 	if s != nil {
-		r.saveSafetyFinal(dbctx, s)
-		if rc, err := r.st.SafetyReceipt(dbctx, runID); err == nil {
+		e.PPS = int(s.meter.Snapshot().PPS)
+		if !r.saveSafetyFinal(dbctx, s) {
+			msg += "; safety receipt incomplete"
+		} else if rc, err := r.st.SafetyReceipt(dbctx, runID); err == nil {
 			rep := safety.BuildReport(rc)
 			msg += "; safety " + string(rep.Status)
 			log.Info("safety receipt", "status", rep.Status, "nmap_packets", rc.NmapPackets,
@@ -417,15 +482,16 @@ func (r *Runner) finish(ctx context.Context, s *session, runID int64, status str
 		}
 	}
 	if err := r.st.FinishRun(dbctx, runID, status, active); err != nil {
-		log.Error("scan run status not saved", "status", status, "err", err)
+		log.Error("scan run status not saved, will resume", "status", status, "err", err)
+		r.setStale(runID, true)
+		e.Message = msg + "; status not saved: " + err.Error()
+		r.publish(e)
 		return
 	}
+	r.setStale(runID, false)
 	log.Info("scan run stopped", "status", status, "active_ms", active.Milliseconds())
 	final := status == store.RunDone || status == store.RunFailed || status == store.RunCancelled
-	e := Event{RunID: runID, Kind: EventFinished, Message: msg}
-	if s != nil {
-		e.PPS = int(s.meter.Snapshot().PPS)
-	}
+	e.Message = msg
 	if final {
 		e.Progress = 1
 	}
@@ -433,6 +499,26 @@ func (r *Runner) finish(ctx context.Context, s *session, runID int64, status str
 	if final {
 		r.runEnded(context.WithoutCancel(ctx), runID, status)
 	}
+}
+
+// setStale records whether a run's last status could not be stored.
+func (r *Runner) setStale(runID int64, stale bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !stale {
+		delete(r.stale, runID)
+		return
+	}
+	if r.stale == nil {
+		r.stale = map[int64]bool{}
+	}
+	r.stale[runID] = true
+}
+
+func (r *Runner) isStale(runID int64) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.stale[runID]
 }
 
 // runEnded calls OnRunDone once per run.

@@ -100,8 +100,9 @@ func (r *Runner) Tick(ctx context.Context, now time.Time) {
 			continue
 		}
 		// A running run not executing here belongs to another live process
-		// (runs of a dead process were reset to paused by Recover).
-		if o.Status == store.RunRunning {
+		// (runs of a dead process were reset to paused by Recover), unless
+		// this process failed to store its last status (stale): resume it.
+		if o.Status == store.RunRunning && !r.isStale(o.ID) {
 			if !r.isActive(o.ID) {
 				elsewhere[*o.ConfigID] = true
 			}
@@ -138,6 +139,10 @@ func (r *Runner) tickConfig(ctx context.Context, now time.Time, cfg store.ScanCo
 		return nil
 	}
 	if o, ok := open[cfg.ID]; ok {
+		if !r.reserve(cfg.ID) {
+			return nil
+		}
+		defer r.release(cfg.ID)
 		r.cfg.Log.Info("resuming scan run", "run", o.ID, "profile", cfg.Name, "until", deadline)
 		r.launch(ctx, o.ID, cfg, deadline, now, false)
 		return nil

@@ -49,7 +49,7 @@ func setup(t *testing.T, targets ...model.Target) *fixture {
 	fs.configs = []store.ScanConfig{cfg}
 	sc := newFakeScanner()
 	fp := &fakeProber{}
-	r := New(fs, sc, fp, nil, labScope(), Config{Log: quiet})
+	r := New(fs, sc, fp, nil, labScope(), Config{Log: quiet, RetryBackoff: time.Millisecond})
 	return &fixture{fs: fs, sc: sc, fp: fp, r: r, cfg: cfg}
 }
 
