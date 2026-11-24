@@ -1,0 +1,11 @@
+# want: auth/credential header "X-Api-Key" is not allowed
+id: bad-apikey
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /
+    headers:
+      X-Api-Key: abc
+    status: [200]

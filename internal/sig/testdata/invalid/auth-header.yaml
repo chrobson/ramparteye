@@ -1,0 +1,11 @@
+# want: auth/credential header "Authorization" is not allowed
+id: bad-auth
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /manager/html
+    headers:
+      Authorization: Basic dG9tY2F0OnRvbWNhdA==
+    status: [200]

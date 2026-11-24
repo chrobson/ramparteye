@@ -1,0 +1,17 @@
+id: joomla
+name: Joomla!
+category: cms
+confidence: 85
+description: Joomla! CMS (generator meta tag, /media/jui and /media/system assets).
+condition: or
+cwe: [497]
+attack: [T1190]
+remediation: 'Keep Joomla and its extensions up to date and remove files that reveal the version.'
+matchers:
+  - type: body
+    regex: '<meta name="generator" content="Joomla!'
+  - type: header
+    name: X-Content-Encoded-By
+    regex: 'Joomla'
+  - type: body
+    regex: '/media/(?:jui|system)/(?:js|css)/'

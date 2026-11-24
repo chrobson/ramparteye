@@ -1,0 +1,20 @@
+id: grafana
+name: Grafana
+category: admin-panel
+confidence: 90
+description: Grafana dashboard (title, grafanaBootData, grafana_session cookie, /api/health with the version).
+condition: or
+cwe: [1327]
+attack: [T1078]
+remediation: 'Expose Grafana through SSO or VPN, disable sign-up and anonymous access, and change the default admin password.'
+matchers:
+  - type: title
+    regex: '^Grafana'
+  - type: body
+    regex: 'window\.grafanaBootData|grafana-app'
+  - type: cookie
+    regex: '^grafana_'
+  - type: path
+    path: /api/health
+    status: [200]
+    regex: '(?s)"database"\s*:\s*"ok".*"version"\s*:\s*"(?P<version>[^"]+)"'

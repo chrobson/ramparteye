@@ -1,0 +1,20 @@
+id: phpmyadmin
+name: phpMyAdmin
+category: admin-panel
+confidence: 95
+description: phpMyAdmin panel (title, phpMyAdmin/pma_* cookies, /phpmyadmin/ path).
+condition: or
+cwe: [1327]
+attack: [T1078, T1190]
+remediation: 'Restrict phpMyAdmin to the management network or VPN and require additional authentication on the web server.'
+matchers:
+  - type: title
+    regex: 'phpMyAdmin'
+  - type: cookie
+    regex: '^(?:phpMyAdmin|pma_)'
+  - type: body
+    regex: 'PMA_commonParams|pma_absolute_uri|phpmyadmin\.css'
+  - type: path
+    path: /phpmyadmin/
+    status: [200]
+    regex: '<title>phpMyAdmin'

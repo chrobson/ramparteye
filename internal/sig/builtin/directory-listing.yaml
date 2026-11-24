@@ -1,0 +1,15 @@
+id: directory-listing
+name: Directory listing
+category: other
+confidence: 80
+description: Directory listing is enabled (an "Index of /" page).
+condition: or
+cwe: [548]
+remediation: 'Disable directory listing (Options -Indexes in Apache, autoindex off in nginx).'
+references:
+  - https://httpd.apache.org/docs/2.4/mod/mod_autoindex.html
+matchers:
+  - type: title
+    regex: '^Index of /'
+  - type: body
+    regex: '<h1>Index of /|<title>Directory listing for /'

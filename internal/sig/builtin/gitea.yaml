@@ -1,0 +1,14 @@
+id: gitea
+name: Gitea
+category: other
+confidence: 90
+description: Gitea Git service (i_like_gitea cookie, "Powered by Gitea" footer).
+condition: or
+cwe: [1327]
+attack: [T1078]
+remediation: 'Disable open registration and restrict Gitea to the corporate network or SSO.'
+matchers:
+  - type: cookie
+    regex: '^i_like_gitea$'
+  - type: body
+    regex: '(?i)Powered by Gitea|content="Gitea'

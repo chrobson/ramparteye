@@ -1,0 +1,9 @@
+# want: encoded traversal
+id: bad-encoded
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /static/%2E%2E/%2e%2e/etc/passwd
+    status: [200]

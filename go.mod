@@ -6,6 +6,7 @@ require github.com/ctx42/testing v0.60.0
 
 require (
 	github.com/jackc/pgx/v5 v5.13.0
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/crypto v0.59.0
 	golang.org/x/time v0.16.0
 )

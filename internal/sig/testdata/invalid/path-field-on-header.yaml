@@ -1,0 +1,9 @@
+# want: path/method/headers/header only allowed on type path
+id: bad-mixed
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: header
+    name: Server
+    method: DELETE

@@ -1,0 +1,18 @@
+id: redis-noauth
+name: Redis without authentication
+category: server
+confidence: 85
+severity: high
+description: Redis answered the nmap probe (INFO) with its full version, so it runs without a password and without protected mode. Inferred from the banner only; RampartEye never sends write commands to Redis.
+condition: and
+cwe: [306]
+attack: [T1190]
+remediation: 'Enable authentication (requirepass or ACL) and protected-mode, and expose port 6379 only to the application network.'
+references:
+  - https://redis.io/docs/latest/operate/oss_and_stack/management/security/
+matchers:
+  - type: service
+    product: '(?i)^Redis key-value store (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)'
+  - type: service
+    negate: true
+    banner: '(?i)auth|protected|denied'

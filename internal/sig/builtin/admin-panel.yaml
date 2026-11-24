@@ -1,0 +1,19 @@
+id: admin-panel
+name: Administration panel (/admin)
+category: admin-panel
+confidence: 60
+description: Generic administration panel under /admin (Basic auth or a form with a password field). GET only, no login attempts.
+condition: or
+cwe: [1327]
+attack: [T1078, T1133]
+remediation: 'Expose the administration panel only to the management network or over VPN, and enforce MFA.'
+matchers:
+  - type: title
+    regex: '(?i)\badmin(?:istration|istrator)?\s*(?:panel|console|login|dashboard)\b'
+  - type: path
+    path: /admin
+    status: [401]
+  - type: path
+    path: /admin
+    status: [200]
+    regex: '(?i)<input[^>]+type=["'']?password'

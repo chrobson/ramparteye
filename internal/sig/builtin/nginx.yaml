@@ -1,0 +1,14 @@
+id: nginx
+name: nginx
+category: server
+confidence: 85
+description: nginx web server (Server header or nmap product).
+condition: or
+cwe: [497]
+remediation: 'Hide the server version (server_tokens off) and keep nginx on a supported release.'
+matchers:
+  - type: header
+    name: Server
+    regex: '(?i)nginx(?:/(?P<version>[0-9.]+))?'
+  - type: service
+    product: '(?i)nginx'

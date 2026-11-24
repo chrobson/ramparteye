@@ -1,0 +1,1 @@
+{"wordpress":{"name":"wordpress","listen":"[::]:8085","upstream":"wordpress:80","enabled":true,"toxics":[{"attributes":{"latency":500,"jitter":50},"name":"latency_downstream","type":"latency","stream":"downstream","toxicity":1},{"attributes":{"delay":2000},"name":"slow_close_downstream","type":"slow_close","stream":"downstream","toxicity":1}]}}

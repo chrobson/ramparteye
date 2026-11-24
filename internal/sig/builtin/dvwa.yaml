@@ -1,0 +1,15 @@
+id: dvwa
+name: DVWA (deliberately vulnerable application)
+category: other
+confidence: 95
+severity: high
+description: Damn Vulnerable Web Application, an application with deliberately planted vulnerabilities (SQLi, XSS, command injection) and well-known default passwords. Detected by the login page title or its dvwa/ assets (GET only, no login).
+condition: or
+cwe: [1188]
+attack: [T1190]
+remediation: 'Remove the deliberately vulnerable DVWA application from networks reachable by users, or isolate it in a lab.'
+matchers:
+  - type: title
+    regex: '(?i)Damn Vulnerable Web Application(?: \(DVWA\))?(?: v(?P<version>[0-9][0-9.]*))?'
+  - type: body
+    regex: '(?i)dvwa/(?:images/login_logo\.png|css/login\.css|js/dvwaPage\.js)'

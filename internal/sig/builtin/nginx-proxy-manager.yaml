@@ -1,0 +1,17 @@
+id: nginx-proxy-manager
+name: Nginx Proxy Manager (panel)
+category: admin-panel
+confidence: 90
+description: Nginx Proxy Manager administration panel (usually port 81). Major version from the /api/ status response (no authentication needed, requested only after the panel was recognised). The default installation account is publicly known, so the panel should not be reachable from the network.
+condition: or
+cwe: [1327]
+attack: [T1078]
+remediation: 'Restrict the Nginx Proxy Manager panel to the management network and change the default credentials.'
+matchers:
+  - type: title
+    regex: '^Nginx Proxy Manager$'
+  - type: path
+    path: /api/
+    status: [200]
+    version_only: true
+    regex: '"status"\s*:\s*"OK"\s*,\s*"version"\s*:\s*\{\s*"major"\s*:\s*(?P<version>[0-9]+)'

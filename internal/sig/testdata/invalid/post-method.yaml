@@ -1,0 +1,10 @@
+# want: method "POST" not allowed
+id: bad-post
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /login
+    method: POST
+    status: [200]

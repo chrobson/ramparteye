@@ -1,0 +1,22 @@
+id: traefik-dashboard
+name: Traefik dashboard and API without authentication
+category: admin-panel
+confidence: 90
+severity: high
+description: Traefik dashboard reachable without authentication, typically through api.insecure=true on port 8080 (/ redirects to /dashboard/). It reveals the routers, services, backends and middleware of the whole infrastructure. Version from /api/version, requested only after the dashboard was recognised.
+condition: or
+cwe: [306]
+attack: [T1190]
+remediation: 'Disable api.insecure and expose the Traefik dashboard only through a router with authentication (e.g. basicAuth or forwardAuth) on the management network.'
+references:
+  - https://doc.traefik.io/traefik/operations/api/
+matchers:
+  - type: title
+    regex: '^Traefik$'
+  - type: body
+    regex: '<meta name="?description"? content="?Traefik UI'
+  - type: path
+    path: /api/version
+    status: [200]
+    version_only: true
+    regex: '"Version"\s*:\s*"v?(?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)[^"]*"\s*,\s*"Codename"'

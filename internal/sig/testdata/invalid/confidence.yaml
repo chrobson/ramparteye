@@ -1,0 +1,8 @@
+# want: confidence must be 1-100
+id: bad-conf
+name: Bad
+category: other
+confidence: 150
+matchers:
+  - type: title
+    regex: x

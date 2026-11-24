@@ -1,0 +1,8 @@
+# want: regex: error parsing regexp
+id: bad-regex
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: body
+    regex: '(unclosed'

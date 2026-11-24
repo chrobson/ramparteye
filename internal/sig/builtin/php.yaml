@@ -1,0 +1,14 @@
+id: php
+name: PHP
+category: framework
+confidence: 80
+description: PHP interpreter revealed by the X-Powered-By header or a PHPSESSID cookie.
+condition: or
+cwe: [497]
+remediation: 'Turn off expose_php in php.ini and keep PHP on a supported release.'
+matchers:
+  - type: header
+    name: X-Powered-By
+    regex: 'PHP/(?P<version>[0-9.]+)'
+  - type: cookie
+    name: PHPSESSID

@@ -1,0 +1,18 @@
+id: httpbin
+name: httpbin
+category: other
+confidence: 90
+severity: low
+description: httpbin test service (echoes headers and the client address, offers /redirect-to). A developer tool that should not be exposed. Version from the home page.
+condition: or
+cwe: [489]
+remediation: 'Remove the httpbin test tool from the production network or restrict access to it.'
+matchers:
+  - type: body
+    regex: '(?s)<pre class="version">\s*(?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)\s*</pre>.*?A simple HTTP Request &(?:amp;)? Response Service'
+  - type: title
+    regex: '(?i)^httpbin(?:\.org)?$'
+  - type: title
+    regex: '(?i)^go-httpbin\b'
+  - type: body
+    regex: 'A simple HTTP Request &(?:amp;)? Response Service'

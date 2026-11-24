@@ -1,0 +1,35 @@
+id: wordpress
+name: WordPress
+category: cms
+confidence: 90
+description: WordPress CMS (generator meta tag, wp-content/wp-includes paths, api.w.org Link header, wordpress_* cookies). Version from the generator meta tag, the ver= parameter of core stylesheets, or /readme.html and the /feed/ channel (GET only, only after WordPress was detected). A version older than 6.0 raises the severity to high (outdated core without security fixes).
+condition: or
+outdated:
+  below: "6.0"
+  severity: high
+cwe: [1104]
+attack: [T1190]
+remediation: 'Update WordPress, its themes and plugins to supported versions and enable automatic security updates.'
+matchers:
+  - type: body
+    regex: '<meta name="generator" content="WordPress ?(?P<version>[0-9.]*)'
+  - type: body
+    regex: '/wp-(?:content|includes)/'
+  - type: header
+    name: Link
+    regex: 'api\.w\.org'
+  - type: cookie
+    regex: '^wordpress_'
+  - type: body
+    version_only: true
+    regex: '/wp-(?:admin|includes)/css/[a-z0-9_.-]+\.css\?ver=(?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)\b'
+  - type: path
+    path: /readme.html
+    status: [200]
+    version_only: true
+    regex: '(?is)WordPress.*?<br ?/?>\s*Version (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)'
+  - type: path
+    path: /feed/
+    status: [200]
+    version_only: true
+    regex: '<generator>https?://wordpress\.org/\?v=(?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?)</generator>'

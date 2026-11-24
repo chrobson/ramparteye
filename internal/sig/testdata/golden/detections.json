@@ -1,0 +1,305 @@
+{
+  "apache-server-status": [
+    {
+      "signature": "apache-httpd",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "header:Server": "Apache"
+      }
+    },
+    {
+      "signature": "apache-server-status",
+      "category": "server",
+      "confidence": 90,
+      "evidence": {
+        "path:/server-status": "/server-status -> 200 body: Apache Server Status for"
+      }
+    }
+  ],
+  "dev-vhost": [
+    {
+      "signature": "staging-env",
+      "category": "staging",
+      "confidence": 70,
+      "evidence": {
+        "hostname": "dev.lab.test"
+      }
+    }
+  ],
+  "drupal-nginx": [
+    {
+      "signature": "drupal",
+      "category": "cms",
+      "confidence": 90,
+      "evidence": {
+        "header:X-Generator": "Drupal 10",
+        "version": "10"
+      }
+    },
+    {
+      "signature": "nginx",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "header:Server": "nginx/1.25.3",
+        "version": "1.25.3"
+      }
+    }
+  ],
+  "favicon-and-dirlisting": [
+    {
+      "signature": "directory-listing",
+      "category": "other",
+      "confidence": 80,
+      "evidence": {
+        "title": "Index of /"
+      }
+    }
+  ],
+  "gitea-login": [
+    {
+      "signature": "gitea",
+      "category": "other",
+      "confidence": 90,
+      "evidence": {
+        "body": "Powered by Gitea"
+      }
+    }
+  ],
+  "gitlab": [
+    {
+      "signature": "gitlab",
+      "category": "other",
+      "confidence": 90,
+      "evidence": {
+        "cookie": "_gitlab_session"
+      }
+    }
+  ],
+  "go-httpbin": [
+    {
+      "signature": "httpbin",
+      "category": "other",
+      "confidence": 90,
+      "evidence": {
+        "severity": "Low",
+        "title": "go-httpbin"
+      }
+    }
+  ],
+  "grafana-via-api": [
+    {
+      "signature": "grafana",
+      "category": "admin-panel",
+      "confidence": 90,
+      "evidence": {
+        "path:/api/health": "/api/health -> 200 body: \"database\":\"ok\",\"version\":\"10.2.3\"",
+        "version": "10.2.3"
+      }
+    }
+  ],
+  "iis-admin": [
+    {
+      "signature": "admin-panel",
+      "category": "admin-panel",
+      "confidence": 60,
+      "evidence": {
+        "path:/admin": "/admin -> 401"
+      }
+    },
+    {
+      "signature": "iis",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "header:Server": "Microsoft-IIS/10.0",
+        "version": "10.0"
+      }
+    }
+  ],
+  "iot-camera": [
+    {
+      "signature": "iot-webui",
+      "category": "iot",
+      "confidence": 60,
+      "evidence": {
+        "header:Server": "GoAhead"
+      }
+    }
+  ],
+  "jenkins": [
+    {
+      "signature": "jenkins",
+      "category": "admin-panel",
+      "confidence": 90,
+      "evidence": {
+        "header:X-Jenkins": "2.426.1",
+        "version": "2.426.1"
+      }
+    }
+  ],
+  "joomla": [
+    {
+      "signature": "joomla",
+      "category": "cms",
+      "confidence": 85,
+      "evidence": {
+        "body": "<meta name=\"generator\" content=\"Joomla!"
+      }
+    }
+  ],
+  "kibana": [
+    {
+      "signature": "kibana",
+      "category": "admin-panel",
+      "confidence": 90,
+      "evidence": {
+        "header:Kbn-Version": "8.11.1",
+        "version": "8.11.1"
+      }
+    }
+  ],
+  "login-path": [
+    {
+      "signature": "login-page",
+      "category": "admin-panel",
+      "confidence": 50,
+      "evidence": {
+        "path:/login": "/login -> 200 body: <input type='password"
+      }
+    }
+  ],
+  "mosquitto": [
+    {
+      "signature": "mosquitto-mqtt",
+      "category": "iot",
+      "confidence": 85,
+      "evidence": {
+        "service": "Mosquitto"
+      }
+    }
+  ],
+  "nginx-login": [
+    {
+      "signature": "login-page",
+      "category": "admin-panel",
+      "confidence": 50,
+      "evidence": {
+        "body": "<input type=\"password"
+      }
+    },
+    {
+      "signature": "nginx",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "header:Server": "nginx/1.25.3",
+        "version": "1.25.3"
+      }
+    }
+  ],
+  "phpmyadmin": [
+    {
+      "signature": "phpmyadmin",
+      "category": "admin-panel",
+      "confidence": 95,
+      "evidence": {
+        "title": "phpMyAdmin"
+      }
+    }
+  ],
+  "plain-nothing": [],
+  "spring-actuator": [
+    {
+      "signature": "spring-boot-actuator",
+      "category": "framework",
+      "confidence": 90,
+      "evidence": {
+        "path:/actuator": "/actuator -> 200 body: \"_links\":"
+      }
+    }
+  ],
+  "staging-expired-tls": [
+    {
+      "signature": "nginx",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "header:Server": "nginx"
+      }
+    },
+    {
+      "signature": "staging-env",
+      "category": "staging",
+      "confidence": 70,
+      "evidence": {
+        "hostname": "staging.lab.test"
+      }
+    },
+    {
+      "signature": "tls-expired",
+      "category": "other",
+      "confidence": 95,
+      "evidence": {
+        "tls": "expired 2024-01-01; subject=CN=old.lab"
+      }
+    },
+    {
+      "signature": "tls-self-signed",
+      "category": "other",
+      "confidence": 95,
+      "evidence": {
+        "tls": "self-signed; subject=CN=old.lab"
+      }
+    }
+  ],
+  "tomcat-manager": [
+    {
+      "signature": "tomcat",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "title": "Apache Tomcat/9.0.83",
+        "version": "9.0.83"
+      }
+    },
+    {
+      "signature": "tomcat-manager",
+      "category": "admin-panel",
+      "confidence": 90,
+      "evidence": {
+        "path:/manager/html": "/manager/html -> 401 WWW-Authenticate: Tomcat Manager"
+      }
+    }
+  ],
+  "wordpress": [
+    {
+      "signature": "apache-httpd",
+      "category": "server",
+      "confidence": 85,
+      "evidence": {
+        "header:Server": "Apache/2.4.57",
+        "version": "2.4.57"
+      }
+    },
+    {
+      "signature": "php",
+      "category": "framework",
+      "confidence": 80,
+      "evidence": {
+        "header:X-Powered-By": "PHP/8.2.7",
+        "version": "8.2.7"
+      }
+    },
+    {
+      "signature": "wordpress",
+      "category": "cms",
+      "confidence": 90,
+      "evidence": {
+        "body": "<meta name=\"generator\" content=\"WordPress 6.4.2",
+        "version": "6.4.2"
+      }
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+id: login-page
+name: Login page (/login)
+category: admin-panel
+confidence: 50
+description: Login form on the home page or under /login, detected by its password field without any login attempt.
+condition: or
+cwe: [1327]
+attack: [T1078, T1110]
+remediation: 'Restrict the login form to the networks that need it, enforce MFA and limit login attempts.'
+matchers:
+  - type: body
+    regex: '(?i)<input[^>]+type=["'']?password'
+  - type: path
+    path: /login
+    status: [200]
+    regex: '(?i)<input[^>]+type=["'']?password'

@@ -1,0 +1,17 @@
+id: postgresql
+name: PostgreSQL reachable from the network
+category: server
+confidence: 90
+severity: medium
+description: A PostgreSQL server accepts network connections (nmap product or service name). Databases should not be exposed outside the application network.
+condition: or
+cwe: [1327]
+attack: [T1190]
+remediation: 'Restrict port 5432 with the firewall and pg_hba.conf to the application servers, and enforce TLS.'
+matchers:
+  - type: service
+    # nmap's "9.6.0 or later" is a lower bound, not the version: no version
+    # is reported then. A range ("16.0 - 16.2") reports its lower end.
+    product: '(?i)PostgreSQL(?: DB)?(?: (?P<version>[0-9]+(?:\.[0-9]+)*)(?: - [0-9.]+)?$)?'
+  - type: service
+    banner: '^postgresql'

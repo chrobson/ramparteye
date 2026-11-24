@@ -1,0 +1,10 @@
+id: tls-expired
+name: Expired TLS certificate
+category: other
+confidence: 95
+description: The expiry date (notAfter) of the certificate presented by the service has passed.
+cwe: [298]
+remediation: 'Renew the certificate and automate renewal (e.g. ACME) with an alert before the expiry date.'
+matchers:
+  - type: tls
+    expired: true

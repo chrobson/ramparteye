@@ -1,0 +1,6 @@
+# want: at least one matcher is required
+id: bad-empty
+name: Bad
+category: other
+confidence: 50
+matchers: []

@@ -1,0 +1,15 @@
+id: ftp
+name: FTP server
+category: server
+confidence: 85
+severity: low
+description: FTP service recognised by nmap (service name or product). FTP sends passwords in clear text. RampartEye never attempts a login (anonymous included).
+condition: or
+cwe: [319]
+attack: [T1190]
+remediation: 'Replace FTP with SFTP or FTPS, because FTP sends passwords and data in clear text.'
+matchers:
+  - type: service
+    banner: '^(?:ssl/)?ftp\b'
+  - type: service
+    product: '(?i)\b(?:vsftpd|ProFTPD|Pure-FTPd|FileZilla ftpd)\b'

@@ -1,0 +1,8 @@
+# want: category must be one of
+id: bad-cat
+name: Bad
+category: exploit
+confidence: 50
+matchers:
+  - type: title
+    regex: x

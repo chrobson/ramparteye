@@ -1,0 +1,10 @@
+# want: request body is not allowed
+id: bad-body
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /api
+    body: '{"user":"admin","password":"admin"}'
+    status: [200]

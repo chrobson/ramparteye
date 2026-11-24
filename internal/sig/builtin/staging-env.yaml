@@ -1,0 +1,14 @@
+id: staging-env
+name: Test or staging environment
+category: staging
+confidence: 70
+description: Host name (vhost, certificate SAN, redirects) or page title pointing to a dev, test or staging environment.
+condition: or
+cwe: [489]
+attack: [T1190]
+remediation: 'Cut the test environment off from the user network (VPN, IP allowlist) and do not use production data in it.'
+matchers:
+  - type: hostname
+    regex: '(?i)(?:^|[.-])(?:staging|stage|stg|dev|devel|develop|test|testing|uat|qa|preprod|sandbox)(?:[0-9]*)(?:[.-]|$)'
+  - type: title
+    regex: '(?i)\b(?:staging|preprod|test(?:ing)? (?:environment|server|site|instance)|dev(?:elopment)? (?:environment|server|instance))\b'

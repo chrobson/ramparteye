@@ -1,0 +1,16 @@
+id: iis
+name: Microsoft IIS
+category: server
+confidence: 85
+description: Microsoft Internet Information Services (Server header, X-AspNet-Version, nmap product).
+condition: or
+cwe: [497]
+remediation: 'Remove the Server and X-Powered-By headers (removeServerHeader) and keep IIS up to date.'
+matchers:
+  - type: header
+    name: Server
+    regex: 'Microsoft-IIS(?:/(?P<version>[0-9.]+))?'
+  - type: header
+    name: X-AspNet-Version
+  - type: service
+    product: 'Microsoft IIS'

@@ -1,0 +1,9 @@
+# want: path must not contain ..
+id: bad-traversal
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /static/../../etc/passwd
+    status: [200]

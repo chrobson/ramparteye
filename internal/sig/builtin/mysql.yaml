@@ -1,0 +1,20 @@
+id: mysql
+name: MySQL/MariaDB reachable from the network
+category: server
+confidence: 90
+severity: medium
+description: A MySQL or MariaDB server accepts network connections (nmap product or service name). MySQL older than 8.0 (e.g. 5.7, end of life in 2023) is flagged as outdated; MariaDB versions (5.5.5-10.x) are not compared.
+condition: or
+outdated:
+  below: "8.0"
+  severity: high
+cwe: [1104, 1327]
+attack: [T1190]
+remediation: 'Upgrade MySQL to a supported release and restrict port 3306 to the application servers.'
+matchers:
+  - type: service
+    product: '(?i)^MySQL(?: (?P<version>[0-9]+\.[0-9]+\.[0-9]+)(?:$|[^-0-9.]))?'
+  - type: service
+    product: '(?i)MariaDB'
+  - type: service
+    banner: '^mysql'

@@ -1,0 +1,15 @@
+id: haproxy-stats
+name: HAProxy statistics
+category: admin-panel
+confidence: 90
+description: Publicly reachable HAProxy statistics page (/haproxy?stats) that reveals backends and their state.
+condition: or
+cwe: [497]
+remediation: 'Protect the HAProxy statistics page with a password (stats auth) and expose it only to the management network.'
+matchers:
+  - type: title
+    regex: '(?i)Statistics Report for HAProxy'
+  - type: path
+    path: /haproxy?stats
+    status: [200]
+    regex: '(?i)Statistics Report for HAProxy(?:.*?version (?P<version>[0-9][0-9.]*))?'

@@ -1,0 +1,16 @@
+id: mosquitto-mqtt
+name: MQTT broker (Mosquitto)
+category: iot
+confidence: 85
+description: MQTT broker (Eclipse Mosquitto) detected by the nmap product or banner, or by port 1883/8883.
+condition: or
+cwe: [1327]
+attack: [T1190]
+remediation: 'Disable anonymous access (allow_anonymous false), enforce TLS and restrict the MQTT port to the device network.'
+matchers:
+  - type: service
+    product: '(?i)mosquitto|mqtt'
+  - type: service
+    banner: '(?i)mosquitto|mqtt'
+  - type: service
+    ports: [1883, 8883]

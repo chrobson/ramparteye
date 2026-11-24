@@ -1,0 +1,21 @@
+id: drupal
+name: Drupal
+category: cms
+confidence: 90
+description: Drupal CMS (X-Generator, X-Drupal-Cache, data-drupal attributes, SESS<hash> cookie).
+condition: or
+cwe: [497]
+attack: [T1190]
+remediation: 'Keep Drupal and its modules up to date and hide files that reveal the version (CHANGELOG.txt).'
+matchers:
+  - type: header
+    name: X-Generator
+    regex: 'Drupal ?(?P<version>\d+)?'
+  - type: header
+    name: X-Drupal-Cache
+  - type: header
+    name: X-Drupal-Dynamic-Cache
+  - type: body
+    regex: 'Drupal\.settings|data-drupal-selector|<meta name="Generator" content="Drupal'
+  - type: cookie
+    regex: '^S?SESS[0-9a-f]{32}$'

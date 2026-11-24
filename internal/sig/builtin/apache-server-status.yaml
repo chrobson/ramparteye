@@ -1,0 +1,15 @@
+id: apache-server-status
+name: Apache mod_status (/server-status)
+category: server
+confidence: 90
+description: Publicly reachable /server-status page of mod_status (reveals clients and requested URLs).
+condition: or
+cwe: [497]
+remediation: 'Restrict /server-status with Require ip to monitoring addresses, or disable mod_status.'
+references:
+  - https://httpd.apache.org/docs/2.4/mod/mod_status.html
+matchers:
+  - type: path
+    path: /server-status
+    status: [200]
+    regex: 'Apache Server Status for|Server Version: Apache(?:/(?P<version>[0-9.]+))?'

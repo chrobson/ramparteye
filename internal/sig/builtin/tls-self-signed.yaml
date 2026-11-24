@@ -1,0 +1,10 @@
+id: tls-self-signed
+name: Self-signed TLS certificate
+category: other
+confidence: 95
+description: The service presents a self-signed certificate (no trusted chain).
+cwe: [295]
+remediation: 'Replace the self-signed certificate with one issued by a trusted CA (public or corporate).'
+matchers:
+  - type: tls
+    self_signed: true

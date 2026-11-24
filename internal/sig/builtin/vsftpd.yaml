@@ -1,0 +1,16 @@
+id: vsftpd
+name: vsftpd
+category: server
+confidence: 90
+severity: low
+description: vsftpd server with the version from the nmap banner. Versions older than 3.0 (including the backdoored 2.3.4) are flagged as outdated. No login attempts.
+condition: or
+outdated:
+  below: "3.0"
+  severity: high
+cwe: [1104, 319]
+attack: [T1190]
+remediation: 'Upgrade vsftpd to a supported release and replace FTP with SFTP or FTPS.'
+matchers:
+  - type: service
+    product: '(?i)\bvsftpd(?: (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?))?'

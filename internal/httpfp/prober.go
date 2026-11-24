@@ -51,6 +51,12 @@ func BaseURL(ep model.Endpoint) string {
 // fetch performs one GET/HEAD request without following redirects. The body
 // is read up to limit bytes; reaching the limit is not an error.
 func (p *HTTPProber) fetch(ctx context.Context, c *http.Client, method, rawURL string, limit int64) (*response, error) {
+	return p.fetchHeader(ctx, c, method, rawURL, limit, nil)
+}
+
+// fetchHeader is fetch with extra request headers (already vetted by the
+// caller); they never replace the User-Agent.
+func (p *HTTPProber) fetchHeader(ctx context.Context, c *http.Client, method, rawURL string, limit int64, hdr http.Header) (*response, error) {
 	if method != http.MethodGet && method != http.MethodHead {
 		return nil, ErrMethodNotAllowed
 	}
@@ -61,8 +67,11 @@ func (p *HTTPProber) fetch(ctx context.Context, c *http.Client, method, rawURL s
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", p.opt.UserAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+	for k, vs := range hdr {
+		req.Header[http.CanonicalHeaderKey(k)] = append([]string(nil), vs...)
+	}
+	req.Header.Set("User-Agent", p.opt.UserAgent)
 	start := time.Now()
 	resp, err := c.Do(req)
 	if err != nil {
@@ -84,8 +93,8 @@ func (p *HTTPProber) fetch(ctx context.Context, c *http.Client, method, rawURL s
 }
 
 // fetchRetry is fetch with Options.Retries retries after transient errors.
-func (p *HTTPProber) fetchRetry(ctx context.Context, c *http.Client, method, rawURL string, limit int64) (*response, error) {
-	resp, err := p.fetch(ctx, c, method, rawURL, limit)
+func (p *HTTPProber) fetchRetry(ctx context.Context, c *http.Client, method, rawURL string, limit int64, hdr http.Header) (*response, error) {
+	resp, err := p.fetchHeader(ctx, c, method, rawURL, limit, hdr)
 	for i := 0; i < p.opt.Retries && err != nil && retryable(ctx, rawURL, err); i++ {
 		t := time.NewTimer(p.opt.RetryBackoff)
 		select {
@@ -94,7 +103,7 @@ func (p *HTTPProber) fetchRetry(ctx context.Context, c *http.Client, method, raw
 			return nil, err
 		case <-t.C:
 		}
-		resp, err = p.fetch(ctx, c, method, rawURL, limit)
+		resp, err = p.fetchHeader(ctx, c, method, rawURL, limit, hdr)
 	}
 	return resp, err
 }
@@ -147,7 +156,7 @@ func (p *HTTPProber) Probe(ctx context.Context, ep model.Endpoint) (model.HTTPOb
 	var last *response
 	var tlsState *tls.ConnectionState
 	for {
-		resp, err := p.fetchRetry(ctx, c, http.MethodGet, cur, p.opt.MaxBody)
+		resp, err := p.fetchRetry(ctx, c, http.MethodGet, cur, p.opt.MaxBody, nil)
 		if err != nil && !legacyTried && ctx.Err() == nil && !isRefused(err) &&
 			strings.HasPrefix(cur, "https:") && isTLSHandshakeError(err) {
 			// Old devices often speak only TLS 1.0/1.1 or RSA-kex/3DES suites,

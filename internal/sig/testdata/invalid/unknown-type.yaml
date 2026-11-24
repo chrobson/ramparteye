@@ -1,0 +1,8 @@
+# want: unknown matcher type
+id: bad-type
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: exec
+    regex: x

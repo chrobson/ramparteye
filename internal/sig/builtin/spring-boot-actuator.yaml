@@ -1,0 +1,22 @@
+id: spring-boot-actuator
+name: Spring Boot Actuator
+category: framework
+confidence: 90
+description: Exposed Spring Boot Actuator endpoints (/actuator, /actuator/health) or a Whitelabel Error Page.
+condition: or
+cwe: [215]
+attack: [T1190]
+remediation: 'Expose only the health and info endpoints over HTTP (management.endpoints.web.exposure.include) and protect the rest with authentication.'
+references:
+  - https://docs.spring.io/spring-boot/reference/actuator/endpoints.html
+matchers:
+  - type: path
+    path: /actuator
+    status: [200]
+    regex: '"_links"\s*:'
+  - type: path
+    path: /actuator/health
+    status: [200]
+    regex: '"status"\s*:\s*"(?:UP|DOWN|OUT_OF_SERVICE)"'
+  - type: body
+    regex: 'Whitelabel Error Page'

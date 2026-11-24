@@ -1,0 +1,10 @@
+# want: too many extra paths: 4 (max 3)
+id: bad-paths
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - {type: path, path: /a, status: [200]}
+  - {type: path, path: /b, status: [200]}
+  - {type: path, path: /c, status: [200]}
+  - {type: path, path: /d, status: [200]}

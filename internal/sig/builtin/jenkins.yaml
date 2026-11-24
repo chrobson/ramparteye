@@ -1,0 +1,19 @@
+id: jenkins
+name: Jenkins
+category: admin-panel
+confidence: 90
+description: Jenkins CI server (X-Jenkins/X-Hudson headers, title, static assets).
+condition: or
+cwe: [1327]
+attack: [T1078, T1190]
+remediation: 'Restrict Jenkins to the internal network, disable anonymous access and sign-up, and keep plugins up to date.'
+matchers:
+  - type: header
+    name: X-Jenkins
+    regex: '(?P<version>[0-9][0-9.]*)'
+  - type: header
+    name: X-Hudson
+  - type: title
+    regex: '\[Jenkins\]|^Jenkins$|Sign in \[Jenkins\]'
+  - type: body
+    regex: 'Welcome to Jenkins!|jenkins-head-icon'

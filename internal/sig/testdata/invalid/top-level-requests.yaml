@@ -1,0 +1,11 @@
+# want: field requests not found
+id: bad-requests
+name: Bad
+category: other
+confidence: 50
+requests:
+  - method: PUT
+    path: /upload
+matchers:
+  - type: status
+    status: [200]

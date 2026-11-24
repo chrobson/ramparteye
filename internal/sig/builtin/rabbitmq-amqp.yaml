@@ -1,0 +1,15 @@
+id: rabbitmq-amqp
+name: AMQP broker (RabbitMQ)
+category: server
+confidence: 85
+severity: low
+description: RabbitMQ AMQP port recognised by nmap (RabbitMQ product, amqp service).
+condition: or
+cwe: [1327]
+attack: [T1190]
+remediation: 'Restrict the AMQP port to the application hosts, remove the guest account and enable TLS.'
+matchers:
+  - type: service
+    product: '(?i)RabbitMQ(?: (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?))?'
+  - type: service
+    banner: '^amqp'

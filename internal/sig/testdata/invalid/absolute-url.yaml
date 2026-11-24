@@ -1,0 +1,9 @@
+# want: path must be absolute on the same host
+id: bad-url
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: //attacker.example/x
+    status: [200]

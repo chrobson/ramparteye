@@ -1,0 +1,15 @@
+id: tomcat
+name: Apache Tomcat
+category: server
+confidence: 85
+description: Apache Tomcat servlet container (default page, error page or nmap product).
+condition: or
+cwe: [497]
+remediation: 'Hide the Tomcat version on error pages (ErrorReportValve showServerInfo=false) and keep Tomcat on a supported release.'
+matchers:
+  - type: title
+    regex: 'Apache Tomcat(?:/(?P<version>[0-9.]+))?'
+  - type: body
+    regex: '<h3>Apache Tomcat(?:/(?P<version>[0-9.]+))?</h3>'
+  - type: service
+    product: 'Apache Tomcat'

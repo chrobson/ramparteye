@@ -1,0 +1,21 @@
+id: tomcat-manager
+name: Apache Tomcat Manager
+category: admin-panel
+confidence: 90
+description: Tomcat Manager panel under /manager/html (Basic realm "Tomcat Manager Application" or the manager page). No login attempts.
+condition: or
+cwe: [1188]
+attack: [T1078, T1190]
+remediation: 'Remove the manager application or restrict it with a RemoteAddrValve filter to the management network, and set strong, unique passwords.'
+references:
+  - https://tomcat.apache.org/tomcat-9.0-doc/manager-howto.html
+matchers:
+  - type: path
+    path: /manager/html
+    status: [401]
+    header: WWW-Authenticate
+    header_regex: 'Tomcat Manager'
+  - type: path
+    path: /manager/html
+    status: [200]
+    regex: 'Tomcat Web Application Manager'

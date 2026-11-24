@@ -1,0 +1,8 @@
+id: service-hostname
+name: Service and hostname
+category: staging
+confidence: 10
+condition: and
+matchers:
+  - {type: service, product: 'x', banner: 'y', ports: [1, 65535]}
+  - {type: hostname, regex: '^dev\.'}

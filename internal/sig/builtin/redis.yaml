@@ -1,0 +1,15 @@
+id: redis
+name: Redis
+category: server
+confidence: 90
+severity: low
+description: Redis server recognised by nmap (product or service name). An in-memory database should not be reachable from the network.
+condition: or
+cwe: [1327]
+attack: [T1190]
+remediation: 'Restrict port 6379 with firewall rules to the application hosts and enable TLS.'
+matchers:
+  - type: service
+    product: '(?i)^Redis(?: key-value store)?(?: (?P<version>[0-9]+\.[0-9]+(?:\.[0-9]+)?))?'
+  - type: service
+    banner: '^redis'

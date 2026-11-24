@@ -1,0 +1,10 @@
+# want: field payload not found
+id: bad-field
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: /
+    payload: "' OR 1=1 --"
+    status: [200]

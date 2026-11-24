@@ -1,0 +1,18 @@
+id: gitlab
+name: GitLab
+category: other
+confidence: 90
+description: GitLab (_gitlab_session cookie, X-Gitlab-Meta header, gon.gitlab_url).
+condition: or
+cwe: [1327]
+attack: [T1078]
+remediation: 'Disable open registration, enforce MFA and keep GitLab up to date.'
+matchers:
+  - type: cookie
+    name: _gitlab_session
+  - type: header
+    name: X-Gitlab-Meta
+  - type: body
+    regex: 'gon\.gitlab_url|content="GitLab"'
+  - type: title
+    regex: '· GitLab$|^Sign in · GitLab'

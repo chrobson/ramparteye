@@ -1,0 +1,14 @@
+id: rabbitmq-management
+name: RabbitMQ Management
+category: admin-panel
+confidence: 90
+description: RabbitMQ broker management panel (rabbitmq_management, typically port 15672). Detected by the page title and UI scripts, without any login attempt.
+condition: or
+cwe: [1327]
+attack: [T1078]
+remediation: 'Restrict the RabbitMQ panel (15672) to the management network and remove the default guest account.'
+matchers:
+  - type: title
+    regex: '^RabbitMQ Management$'
+  - type: body
+    regex: '(?is)<script[^>]+src="js/ejs-1\.0\.min\.js".*<script[^>]+src="js/main\.js"'

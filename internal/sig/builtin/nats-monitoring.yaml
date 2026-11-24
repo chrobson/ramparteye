@@ -1,0 +1,11 @@
+id: nats-monitoring
+name: NATS monitoring
+category: admin-panel
+confidence: 85
+description: NATS server monitoring endpoint (port 8222, a page linking /varz and /connz).
+condition: or
+cwe: [497]
+remediation: 'Bind the NATS monitoring port (8222) to localhost or the monitoring network.'
+matchers:
+  - type: body
+    regex: '(?i)nats\.io|href="?/?varz'

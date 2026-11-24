@@ -1,0 +1,19 @@
+id: kibana
+name: Kibana
+category: admin-panel
+confidence: 90
+description: Kibana dashboard (kbn-name/kbn-version headers, kbn-injected-metadata).
+condition: or
+cwe: [1327]
+attack: [T1078]
+remediation: 'Enable Elastic Security authentication and expose Kibana only to the internal network.'
+matchers:
+  - type: header
+    name: Kbn-Version
+    regex: '(?P<version>[0-9][0-9.]*)'
+  - type: header
+    name: Kbn-Name
+  - type: body
+    regex: 'kbn-injected-metadata|__kbnBootstrap__|kbnInjectedMetadata'
+  - type: title
+    regex: '^Kibana$|^Elastic$'

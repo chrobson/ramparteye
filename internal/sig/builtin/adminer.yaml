@@ -1,0 +1,16 @@
+id: adminer
+name: Adminer
+category: admin-panel
+confidence: 90
+description: Adminer database panel (title, adminer_* cookie, version in the footer).
+condition: or
+cwe: [1327]
+attack: [T1078, T1190]
+remediation: 'Remove Adminer from the server or restrict it to the management network.'
+matchers:
+  - type: title
+    regex: '(?i)\bAdminer\b'
+  - type: cookie
+    regex: '^adminer_'
+  - type: body
+    regex: '(?i)<span class="version">(?P<version>[0-9][0-9.]*)</span>|adminer\.org'

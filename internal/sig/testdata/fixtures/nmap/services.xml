@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE nmaprun>
+<nmaprun scanner="nmap" args="nmap -sT -Pn -n -p 21,2121,3306,3307,5673,6379-6381,15432 -sV --version-light --open -oX - 127.0.0.1" start="1795251600" version="7.95" xmloutputversion="1.05">
+<host starttime="1795251600" endtime="1795251642"><status state="up" reason="user-set" reason_ttl="0"/>
+<address addr="127.0.0.1" addrtype="ipv4"/>
+<ports>
+<port protocol="tcp" portid="21"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="ftp" product="vsftpd" version="3.0.3" ostype="Unix" method="probed" conf="10"><cpe>cpe:/a:vsftpd:vsftpd:3.0.3</cpe></service></port>
+<port protocol="tcp" portid="2121"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="ftp" product="vsftpd" version="2.3.4" ostype="Unix" method="probed" conf="10"><cpe>cpe:/a:vsftpd:vsftpd:2.3.4</cpe></service></port>
+<port protocol="tcp" portid="3306"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="mysql" product="MySQL" version="5.7.44" method="probed" conf="10"><cpe>cpe:/a:mysql:mysql:5.7.44</cpe></service></port>
+<port protocol="tcp" portid="3307"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="mysql" product="MySQL" version="5.5.5-10.11.6-MariaDB-0+deb12u1" method="probed" conf="10"><cpe>cpe:/a:mysql:mysql:5.5.5-10.11.6-mariadb-0+deb12u1</cpe></service></port>
+<port protocol="tcp" portid="5673"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="amqp" product="RabbitMQ" version="3.12.12" extrainfo="AMQP 0-9-1" method="probed" conf="10"><cpe>cpe:/a:vmware:rabbitmq:3.12.12</cpe></service></port>
+<port protocol="tcp" portid="6379"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="redis" product="Redis key-value store" version="7.2.4" method="probed" conf="10"><cpe>cpe:/a:redislabs:redis:7.2.4</cpe></service></port>
+<port protocol="tcp" portid="6380"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="redis" product="Redis key-value store" extrainfo="authentication required" method="probed" conf="10"><cpe>cpe:/a:redislabs:redis</cpe></service></port>
+<port protocol="tcp" portid="6381"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="redis" product="Redis key-value store" extrainfo="protected mode" method="probed" conf="10"><cpe>cpe:/a:redislabs:redis</cpe></service></port>
+<port protocol="tcp" portid="15432"><state state="open" reason="syn-ack" reason_ttl="0"/><service name="postgresql" product="PostgreSQL DB" version="9.6.0 or later" method="probed" conf="10"><cpe>cpe:/a:postgresql:postgresql</cpe></service></port>
+</ports>
+<times srtt="120" rttvar="80" to="100000"/>
+</host>
+<runstats><finished time="1795251642" timestr="Sat Nov 21 10:20:42 2026" summary="Nmap done at Sat Nov 21 10:20:42 2026; 1 IP address (1 host up) scanned in 42.10 seconds" elapsed="42.10" exit="success"/><hosts up="1" down="0" total="1"/></runstats>
+</nmaprun>

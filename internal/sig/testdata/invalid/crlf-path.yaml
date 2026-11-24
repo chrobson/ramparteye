@@ -1,0 +1,9 @@
+# want: path contains forbidden characters
+id: bad-crlf
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - type: path
+    path: "/x\r\nX-Injected: 1"
+    status: [200]

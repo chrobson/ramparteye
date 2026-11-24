@@ -1,0 +1,14 @@
+# want: one signature per document expected
+id: bad-two
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - {type: title, regex: x}
+---
+id: bad-two-b
+name: Bad
+category: other
+confidence: 50
+matchers:
+  - {type: title, regex: x}

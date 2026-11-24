@@ -1,0 +1,17 @@
+id: toxiproxy-api
+name: Toxiproxy API without authentication
+category: admin-panel
+confidence: 90
+severity: high
+description: Toxiproxy control API (port 8474 by default). Without authentication it lets anyone add latency, bandwidth limits and dropped connections to the proxied services. The API root returns 404, so /proxies (the proxy list with name/listen fields) is requested only then; GET only.
+condition: and
+cwe: [306]
+attack: [T1190]
+remediation: 'Do not expose the Toxiproxy API outside the test environment; bind it to localhost or block it with the firewall.'
+matchers:
+  - type: status
+    status: [404]
+  - type: path
+    path: /proxies
+    status: [200]
+    regex: '^\s*\{\s*(?:\}|"[^"]+"\s*:\s*\{\s*"name"\s*:\s*"[^"]*"\s*,\s*"listen"\s*:)'

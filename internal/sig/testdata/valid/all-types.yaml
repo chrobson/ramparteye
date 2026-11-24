@@ -1,0 +1,25 @@
+id: all-types
+name: Every matcher type
+category: other
+confidence: 42
+description: Uses every matcher type once (validator acceptance test).
+condition: or
+matchers:
+  - {type: header, name: Server, regex: 'x'}
+  - {type: header, name: X-Present}
+  - {type: cookie, name: SID}
+  - {type: cookie, regex: '^pma_'}
+  - {type: title, regex: 'x'}
+  - {type: body, regex: 'x'}
+  - {type: favicon, hashes: [116323821, -1]}
+  - {type: status, status: [401, 403]}
+  - type: path
+    path: /version
+    method: HEAD
+    headers: {Accept: application/json}
+    status: [200]
+    header: Content-Type
+    header_regex: json
+  - {type: path, path: /version, regex: '"v"'}
+  - {type: path, path: /health, status: [200]}
+  - {type: tls, self_signed: true, expired: true}
