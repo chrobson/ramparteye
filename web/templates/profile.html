@@ -1,0 +1,41 @@
+{{define "title"}}{{.Data.Title}}{{end}}
+{{define "content"}}{{$f := .Data}}
+<p class="text-muted"><a class="underline" href="/profiles">Scan profiles</a></p>
+<h1 class="page-title mt-1">{{if $f.New}}New scan profile{{else}}Scan profile: {{template "cell" (dict "Value" $f.Name "Max" 60)}}{{end}}</h1>
+{{with $f.Error}}<p role="alert" class="alert-error mt-3">{{.}}</p>{{end}}
+<form method="post" action="{{$f.Action}}" class="panel mt-4 grid gap-4">
+<label class="max-w-md"><span class="lbl">Name</span><input name="name" class="input" maxlength="100" required value="{{$f.Name}}"></label>
+
+<fieldset class="grid gap-1"><legend class="lbl mb-1">Targets</legend>
+<label class="flex items-center gap-2"><input type="checkbox" name="all_targets" value="1"{{if $f.AllTargets}} checked{{end}}> All targets (also ones added later)</label>
+{{range $f.Targets}}<label class="flex items-center gap-2"><input type="checkbox" name="target_ids" value="{{.ID}}"{{if hasID $f.TargetIDs .ID}} checked{{end}}> <span class="font-mono">{{.Value}}</span>{{range .Tags}}<span class="tag tag-changed">{{.}}</span>{{end}}</label>
+{{else}}<p class="text-muted">No targets yet: add them on the <a class="underline" href="/targets">Targets</a> page.</p>{{end}}
+</fieldset>
+
+<div class="grid gap-4 lg:grid-cols-2">
+<div class="grid content-start gap-2">
+<label><span class="lbl">Port profile (TCP)</span><select name="port_profile" class="input">{{range $f.Profiles}}<option value="{{.Key}}"{{if eq .Key $f.PortProfile}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+{{if $f.AllPortsMax}}<p class="text-xs text-muted">Automatic scans every port when the targets total at most {{$f.AllPortsMax}} addresses.</p>{{end}}
+<label><span class="lbl">Top ports (automatic and most common profiles)</span><input name="top_ports" type="number" min="1" max="65535" class="input" value="{{$f.TopPorts}}"></label>
+<label class="flex items-center gap-2"><input type="checkbox" name="extra_ports" value="1"{{if $f.ExtraPorts}} checked{{end}}> Second pass over common infrastructure ports outside the top list</label>
+<label><span class="lbl">Extra ports of that pass, e.g. 3001,8787</span><input name="extra_port_list" maxlength="2000" class="input" value="{{$f.ExtraList}}"></label>
+<label><span class="lbl">Own port list, e.g. 22,80,443,8000-8100</span><input name="ports" maxlength="2000" class="input" value="{{$f.Ports}}"{{with $f.AllowedPorts}} placeholder="allowed: {{.}}"{{end}}></label>
+{{with $f.AllowedPorts}}<p class="text-xs text-muted">The safety policy allows only ports {{.}} (RAMPART_SCAN_PORTS).</p>{{end}}
+</div>
+<div class="grid content-start gap-2">
+<label><span class="lbl">Rate for the whole scan (packets/s, 1–{{$f.RateCap}})</span><input name="max_rate" type="number" min="1" max="{{$f.RateCap}}" required class="input" value="{{$f.MaxRate}}"></label>
+<label><span class="lbl">Parallel chunks</span><input name="workers" type="number" min="1" max="64" class="input" value="{{$f.Workers}}"></label>
+<p class="text-xs text-muted">{{$f.ChunkInfo}}</p>
+<div class="grid grid-cols-2 gap-2">
+<label><span class="lbl">Window start</span><input name="window_start" type="time" class="input" value="{{$f.WindowStart}}"></label>
+<label><span class="lbl">Window end</span><input name="window_end" type="time" class="input" value="{{$f.WindowEnd}}"></label>
+</div>
+<p class="text-xs text-muted">Server time. Empty = no window; the end may pass midnight; equal start and end = all day.</p>
+<label><span class="lbl">Repeat every (minutes, empty = manual only)</span><input name="every_minutes" type="number" min="5" max="44640" class="input" value="{{$f.Every}}"></label>
+<label class="flex items-center gap-2"><input type="checkbox" name="enabled" value="1"{{if $f.Enabled}} checked{{end}}> Schedule enabled</label>
+</div>
+</div>
+<p class="text-xs text-muted">A scan that does not fit its window is paused; unfinished chunks continue in the next window.</p>
+<div class="flex gap-2"><button type="submit" class="btn btn-primary">Save profile</button><a class="btn" href="/profiles">Cancel</a></div>
+</form>
+{{end}}

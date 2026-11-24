@@ -1,0 +1,25 @@
+{{define "title"}}Findings{{end}}
+{{define "content"}}{{$d := .Data}}
+<h1 class="page-title">Findings</h1>
+<p class="mt-1 text-muted">Every detection of the latest finished scan. Severity comes from the signature; score is the interest score of the service.</p>
+<section class="panel mt-4" aria-label="Findings">
+{{if $d.Rows}}<p class="mb-2 text-muted">{{num $d.Total}} detection{{if ne $d.Total 1}}s{{end}}{{if gt $d.Total $d.Limit}}, the first {{num $d.Limit}} shown{{end}}</p>
+<div class="overflow-x-auto"><table class="tbl">
+<thead><tr>
+<th{{if $d.Severity.Active}} aria-sort="{{$d.Severity.AriaDir}}"{{end}}><a class="underline" href="{{$d.Severity.Href}}">Severity {{$d.Severity.Arrow}}</a></th>
+<th>Detection</th><th>Category</th><th>Service</th>
+<th{{if $d.ScoreCol.Active}} aria-sort="{{$d.ScoreCol.AriaDir}}"{{end}}><a class="underline" href="{{$d.ScoreCol.Href}}">Score {{$d.ScoreCol.Arrow}}</a></th>
+<th>Confidence</th>
+</tr></thead>
+<tbody>{{range $d.Rows}}<tr>
+<td>{{template "sev" .Severity}}</td>
+<td>{{template "cell" (dict "Value" .Name "Max" 60)}}<div class="font-mono text-xs text-muted">{{template "cell" (dict "Value" .SignatureID "Max" 60)}}</div></td>
+<td>{{.Category}}</td>
+<td><a class="font-mono text-brand-fg underline" href="{{.Href}}">{{.Endpoint}}</a>{{with .VHost}}<div class="text-xs text-muted">{{template "cell" (dict "Value" . "Max" 60)}}</div>{{end}}</td>
+<td>{{template "score" .Score}}</td>
+<td class="font-mono">{{.Confidence}}%</td>
+</tr>{{end}}</tbody></table></div>
+{{else if $d.HasRun}}{{template "empty" (dict "Title" "No findings" "Text" "The latest finished scan matched no signature.")}}
+{{else}}{{template "empty" (dict "Title" "No findings yet" "Text" "Findings appear after the first scan finishes." "Href" "/scans" "Link" "Go to Scans")}}{{end}}
+</section>
+{{end}}

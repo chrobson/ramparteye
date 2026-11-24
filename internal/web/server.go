@@ -25,8 +25,10 @@ import (
 	"github.com/chrobson/ramparteye/internal/dojo"
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/runner"
+	"github.com/chrobson/ramparteye/internal/safety"
 	"github.com/chrobson/ramparteye/internal/scope"
 	"github.com/chrobson/ramparteye/internal/store"
+	"github.com/chrobson/ramparteye/internal/target"
 	webassets "github.com/chrobson/ramparteye/web"
 )
 
@@ -58,31 +60,55 @@ type Store interface {
 	Annotation(ctx context.Context, k model.AssetKey) (store.Annotation, error)
 	UpsertAnnotation(ctx context.Context, a store.Annotation) (store.Annotation, error)
 	DeleteAnnotation(ctx context.Context, k model.AssetKey, userID int64) error
+
+	// Scans, changes, targets and scan profiles.
+	SafetyReceipt(ctx context.Context, runID int64) (safety.Receipt, error)
+	ChangeRuns(ctx context.Context, limit int) ([]store.ChangeRun, error)
+	ChangeRun(ctx context.Context, runID int64) (store.ChangeRun, error)
+	RunSeries(ctx context.Context, limit int) ([]store.RunPoint, error)
+	TargetTags(ctx context.Context) ([]string, error)
+	InsertTargets(ctx context.Context, ts []model.Target, createdBy *int64) (int, error)
+	UpdateTargetTags(ctx context.Context, id int64, tags []string) error
+	DeleteTarget(ctx context.Context, id int64) (string, error)
+	ScanConfigs(ctx context.Context) ([]store.ScanConfig, error)
+	ScanConfig(ctx context.Context, id int64) (store.ScanConfig, error)
+	CreateScanConfig(ctx context.Context, c store.ScanConfig) (int64, error)
+	UpdateScanConfig(ctx context.Context, c store.ScanConfig) error
+	DeleteScanConfig(ctx context.Context, id int64) error
 }
 
 // Runner is the scan runner as the UI sees it; *runner.Runner satisfies it.
 type Runner interface {
+	Start(ctx context.Context, configID int64) (int64, error)
 	Subscribe() (<-chan runner.Event, func())
 	CancelAll(ctx context.Context, by int64) ([]int64, error)
 	ActiveRuns() []int64
 }
 
-// Pusher reports the DefectDojo chip state; *dojo.Pusher satisfies it.
+// Pusher reports the DefectDojo chip state and pushes runs on demand;
+// *dojo.Pusher satisfies it.
 type Pusher interface {
 	Status(ctx context.Context) (dojo.ChipState, error)
+	PushRun(ctx context.Context, runID int64, trigger string) (dojo.PushRecord, error)
 }
 
-// Deps are the server's dependencies. Runner and Pusher may be nil (the
-// chips then show nothing running / not configured).
+// Deps are the server's dependencies. Runner, Pusher and Exchange may be
+// nil (the chips then show nothing running / not configured; scans, pushes
+// and result imports are refused with a message).
 type Deps struct {
-	Store  Store
-	Runner Runner
-	Pusher Pusher
-	Scope  scope.Scope
-	Cfg    config.Config
-	Log    *slog.Logger
+	Store    Store
+	Runner   Runner
+	Pusher   Pusher
+	Exchange Exchange
+	Scope    scope.Scope
+	Cfg      config.Config
+	Log      *slog.Logger
+	// Resolver resolves domain targets on import (nil = system resolver).
+	Resolver target.Resolver
 	// ShutdownCtx, when set, ends long-lived SSE streams once it is done,
-	// so a graceful server shutdown does not wait for them.
+	// so a graceful server shutdown does not wait for them. Scans started
+	// from the UI run under it too (paused at shutdown, resumed by the
+	// scheduler); without it they outlive the request that started them.
 	ShutdownCtx context.Context
 }
 
@@ -172,7 +198,6 @@ func (s *Server) Handler() http.Handler {
 		r.With(auth.RequireUser).Get(auth.PasswordPath, s.passwordPage)
 		r.With(auth.RequireUser).Post(auth.PasswordPath, s.passwordSubmit)
 
-		// Placeholder pages; Tasks 21-24 replace them.
 		r.With(s.require(auth.PermResultsRead)).Get("/", s.dashboard)
 		r.With(s.require(auth.PermResultsRead)).Get("/events", s.events)
 		r.With(s.require(auth.PermScansRun)).Post("/scans/cancel-all", s.cancelAll)
@@ -186,11 +211,43 @@ func (s *Server) Handler() http.Handler {
 		edit.Post("/assets/{ip}/{port}/{proto}/annotation", s.annotationSave)
 		edit.Post("/assets/{ip}/{port}/{proto}/annotation/delete", s.annotationDelete)
 
+		read := r.With(s.require(auth.PermResultsRead))
+		read.Get("/scans", s.scansList)
+		read.Get("/scans/{id}", s.runPage)
+		read.Get("/runs/{id}/safety.json", s.safetyJSON)
+		read.Get("/changes", s.changesPage)
+		read.Get("/changes/{run}", s.changeRunPage)
+		read.Get("/findings", s.findingsPage)
+		r.With(s.require(auth.PermExport)).Post("/scans/{id}/push", s.runPush)
+
+		r.With(s.require(auth.PermTargetsRead)).Get("/targets", s.targetsPage)
+		tw := r.With(s.require(auth.PermTargetsWrite))
+		tw.Post("/targets", s.targetsAdd)
+		tw.Post("/targets/import", s.targetsImport)
+		tw.Post("/targets/{id}/tags", s.targetTags)
+		tw.Post("/targets/{id}/delete", s.targetDelete)
+
+		r.With(s.require(auth.PermTargetsRead)).Get("/profiles", s.profilesList)
+		run := r.With(s.require(auth.PermScansRun))
+		run.Get("/profiles/new", s.profileNew)
+		run.Get("/profiles/{id}", s.profileEdit)
+		run.Post("/profiles", s.profileSave)
+		run.Post("/profiles/{id}", s.profileSave)
+		run.Post("/profiles/{id}/run", s.profileRun)
+		run.Post("/profiles/{id}/delete", s.profileDelete)
+
+		exp := r.With(s.require(auth.PermExport))
+		exp.Get("/exchange", s.exchangePage)
+		exp.Get("/exchange/export.csv", s.exportCSV)
+		exp.Get("/exchange/export.json", s.exportJSON)
+		// Importing needs scans.run as well as the page's export permission.
+		r.With(s.require(auth.PermExport), s.require(auth.PermScansRun)).Post("/exchange/import", s.exchangeImport)
+
+		// Placeholder pages; Task 24 replaces them.
 		for _, n := range navItems {
-			if n.Href == "/" || n.Href == "/assets" {
-				continue
+			if n.Href == "/signatures" || n.Href == "/settings" {
+				r.With(s.require(n.Perm)).Get(n.Href, s.stubPage(n.Label))
 			}
-			r.With(s.require(n.Perm)).Get(n.Href, s.stubPage(n.Label))
 		}
 	})
 	return r

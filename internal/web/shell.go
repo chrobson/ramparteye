@@ -63,6 +63,7 @@ var navGroups = []NavGroup{
 	}},
 	{Label: "Configure", Items: []NavItem{
 		{Label: "Signatures", Href: "/signatures", Perm: auth.PermResultsRead},
+		{Label: "Targets", Href: "/targets", Perm: auth.PermTargetsRead},
 		{Label: "Scan profiles", Href: "/profiles", Perm: auth.PermTargetsRead},
 		{Label: "Import / export", Href: "/exchange", Perm: auth.PermExport},
 		{Label: "Settings", Href: "/settings", Perm: auth.PermSettingsAdmin},

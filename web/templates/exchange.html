@@ -1,0 +1,38 @@
+{{define "title"}}Import / export{{end}}
+{{define "content"}}{{$d := .Data}}
+<h1 class="page-title">Import / export</h1>
+{{with $d.Error}}<p role="alert" class="alert-error mt-4">{{.}}</p>{{end}}
+{{if not $d.Available}}<section class="panel mt-4"><p class="text-muted">Import and export are not available in this process.</p></section>{{end}}
+
+{{with $d.Report}}<section class="panel mt-4" role="status" aria-label="Import report">
+{{template "panel-title" "Import report"}}
+{{if .RunID}}<p><b>Imported as run <a class="font-mono underline" href="/scans/{{.RunID}}">#{{.RunID}}</a></b> · format {{.FormatLabel}} · <a class="underline" href="/changes/{{.RunID}}">changes</a></p>
+<p class="mt-1">Stored: {{num .Hosts}} hosts, {{num .Services}} services, {{num .Detections}} detections.</p>{{end}}
+{{if .Dropped}}<p class="mt-1 text-bad">{{.Dropped}} host{{if ne .Dropped 1}}s{{end}} outside the scan scope {{if eq .Dropped 1}}was{{else}}were{{end}} dropped and not stored.</p>{{end}}
+{{if .Warnings}}<h3 class="lbl mt-3">Warnings</h3><ul class="list-disc pl-5">{{range .Warnings}}<li>{{template "cell" (dict "Value" . "Max" 200)}}</li>{{end}}</ul>{{end}}
+{{if .Errors}}<h3 class="lbl mt-3">Skipped entries</h3><ul class="list-disc pl-5">{{range .Errors}}<li>{{template "cell" (dict "Value" . "Max" 200)}}</li>{{end}}</ul>
+{{if .ErrorsTruncated}}<p class="mt-1 text-xs text-muted">and {{.ErrorsTruncated}} more not listed.</p>{{end}}{{end}}
+</section>{{end}}
+
+{{if and $d.Available (can .Ctx "scans.run")}}<section class="panel mt-4" aria-label="Import results">
+{{template "panel-title" "Import results"}}
+<p class="text-muted">nmap XML (<code class="font-mono">nmap -oX</code>) or a DefectDojo Generic Findings JSON file. Each import becomes a run of kind import and is compared with earlier runs like a scan.</p>
+{{if $d.NoScope}}<p role="alert" class="alert-error mt-2">No scan scope configured: set RAMPART_ALLOWED_CIDRS. Imports are refused until a scope is set.</p>
+{{else}}<p class="mt-1 text-xs text-muted">Hosts outside the scan scope are dropped.</p>{{end}}
+<form method="post" action="/exchange/import" enctype="multipart/form-data" class="mt-2 flex flex-wrap items-end gap-2">
+<label class="grow basis-64"><span class="lbl">File (at most {{$d.MaxMB}} MiB)</span><input name="file" type="file" required accept=".xml,.json,application/xml,application/json" class="input"></label>
+<button type="submit" class="btn btn-primary">Import</button>
+</form>
+</section>{{end}}
+
+{{if and $d.Available (can .Ctx "export")}}<section class="panel mt-4" aria-label="Export">
+{{template "panel-title" "Export"}}
+{{with $d.Run}}<p>Run #{{.ID}}{{if eq .Kind "import"}} (import){{end}}, finished {{ago .Date}}: {{num .Services}} services, {{num .Findings}} DefectDojo findings (false positives excluded).</p>
+<div class="mt-2 flex flex-wrap gap-2">
+<a class="btn" href="/exchange/export.csv?run={{.ID}}">Download CSV</a>
+<a class="btn" href="/exchange/export.json?run={{.ID}}">Download JSON</a>
+</div>
+<p class="mt-2 text-xs text-muted">Files are built on request and not stored on the server. To export another run, open it on the Scans page.</p>
+{{else}}{{template "empty" (dict "Title" "No finished run to export yet" "Text" "Run a scan or import results first.")}}{{end}}
+</section>{{end}}
+{{end}}

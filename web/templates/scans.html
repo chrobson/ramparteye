@@ -1,0 +1,23 @@
+{{define "title"}}Scans{{end}}
+{{define "content"}}{{$d := .Data}}
+<div class="flex flex-wrap items-center justify-between gap-2">
+<h1 class="page-title">Scans</h1>
+{{if can .Ctx "targets.read"}}<a class="btn" href="/profiles">Scan profiles</a>{{end}}
+</div>
+<section id="runs" class="panel mt-4" aria-label="Runs"{{if $d.Polling}} hx-get="/scans" hx-select="#runs" hx-target="this" hx-swap="outerHTML" hx-trigger="every 5s"{{end}}>
+{{template "panel-title" "Runs"}}
+{{if $d.Runs}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Run</th><th>Profile</th><th>Status</th><th>Progress</th><th>Hosts up</th><th>Services</th><th>Started</th><th>Duration</th></tr></thead>
+<tbody>{{range $d.Runs}}<tr>
+<td class="font-mono"><a class="text-brand-fg underline" href="/scans/{{.ID}}">#{{.ID}}</a>{{if eq .Kind "import"}} <span class="tag tag-changed">import</span>{{end}}</td>
+<td>{{with .Profile}}{{template "cell" (dict "Value" . "Max" 40)}}{{else}}<span class="text-dim">–</span>{{end}}</td>
+<td><span class="tag ml-0 {{.Status.Class}}">{{.Status.Label}}</span>{{if .Active}} <span class="text-xs text-muted">live</span>{{end}}</td>
+<td class="font-mono text-xs">{{with .Progress}}{{.}}{{else}}<span class="text-dim">–</span>{{end}}{{if .ChunksFail}} <span class="text-bad">{{.ChunksFail}} failed</span>{{end}}</td>
+<td class="font-mono">{{.HostsUp}}</td>
+<td class="font-mono">{{.Services}}</td>
+<td class="text-muted">{{if .StartedAt.IsZero}}–{{else}}{{ago .StartedAt}}{{end}}</td>
+<td class="text-muted">{{with .Duration}}{{.}}{{else}}–{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No scans yet" "Text" "Create a scan profile and start it with Run now; runs appear here." "Href" "/profiles" "Link" "Go to Scan profiles")}}{{end}}
+</section>
+{{end}}

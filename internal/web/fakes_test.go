@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,7 @@ type fakeStore struct {
 
 	dash   dashData  // dashboard fixtures
 	assets assetData // asset page fixtures
+	scans  scanData  // scans, changes, targets and profile fixtures
 }
 
 // dashData is what the fake store returns for the dashboard queries.
@@ -235,6 +237,14 @@ type fakeRunner struct {
 	active    []int64
 	cancelled bool
 	cancelBy  int64
+	started   []int64 // profiles passed to Start
+	startRun  int64   // run id Start returns
+	startErr  error
+}
+
+func (f *fakeRunner) Start(_ context.Context, configID int64) (int64, error) {
+	f.started = append(f.started, configID)
+	return f.startRun, f.startErr
 }
 
 func (f *fakeRunner) Subscribe() (<-chan runner.Event, func()) {
@@ -260,11 +270,19 @@ func (f *fakeRunner) ActiveRuns() []int64 { return f.active }
 
 // fakePusher returns a fixed chip state.
 type fakePusher struct {
-	chip dojo.ChipState
-	err  error
+	chip    dojo.ChipState
+	err     error
+	pushRec dojo.PushRecord
+	pushErr error
+	pushed  []string // "runID:trigger" of every PushRun call
 }
 
 func (f *fakePusher) Status(context.Context) (dojo.ChipState, error) { return f.chip, f.err }
+
+func (f *fakePusher) PushRun(_ context.Context, runID int64, trigger string) (dojo.PushRecord, error) {
+	f.pushed = append(f.pushed, fmt.Sprintf("%d:%s", runID, trigger))
+	return f.pushRec, f.pushErr
+}
 
 type testEnv struct {
 	srv    *Server
@@ -377,8 +395,16 @@ func sessionCookie(rec *httptest.ResponseRecorder) *http.Cookie {
 	return nil
 }
 
-func (f *fakeStore) Targets(context.Context, string) ([]model.Target, error) {
-	return f.dash.targets, nil
+func (f *fakeStore) Targets(_ context.Context, tag string) ([]model.Target, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []model.Target
+	for _, t := range f.dash.targets {
+		if tag == "" || slices.Contains(t.Tags, tag) {
+			out = append(out, t)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) Runs(context.Context, int) ([]store.RunSummary, error) {

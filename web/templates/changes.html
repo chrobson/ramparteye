@@ -1,0 +1,60 @@
+{{define "title"}}Changes{{end}}
+{{define "content"}}{{$d := .Data}}
+<h1 class="page-title">Changes</h1>
+
+<div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+{{range $d.States}}<a class="stat hover:bg-row" href="/assets?state={{.State}}"><span class="lbl">Hosts {{.State}}</span><b class="stat-value">{{num .Count}}</b></a>{{end}}
+</div>
+{{if $d.InactiveAfter}}<p class="mt-2 text-xs text-muted">A host is inactive after {{$d.InactiveAfter}} scans in a row without an answer, and unstable when it changed state at least {{$d.UnstableFlips}} times in its last {{$d.Window}} scans.</p>{{end}}
+
+<section class="panel mt-4" aria-label="Changes over time">
+{{template "panel-title" "Changes over time"}}
+{{$t := $d.Timeline}}{{if $t.Enough}}
+<svg class="tl" viewBox="0 0 720 200" role="img" aria-label="Changes per finished scan, with hosts up and services">
+<line class="tl-axis" x1="40" y1="{{f1 $t.Bottom}}" x2="710" y2="{{f1 $t.Bottom}}"/>
+<text class="tl-scale" x="36" y="{{f1 $t.Top}}" text-anchor="end" dominant-baseline="hanging">{{$t.MaxChanges}}</text>
+<text class="tl-scale" x="36" y="{{f1 $t.Bottom}}" text-anchor="end">0</text>
+{{range $t.Bars}}{{$b := .}}<a class="tl-bar" href="/changes/{{.RunID}}"><title>{{.Title}}</title>
+<rect class="tl-slot" x="{{f1 .SlotX}}" y="0" width="{{f1 .SlotW}}" height="200"/>
+{{range .Segments}}<rect class="tl-seg {{.Class}}" x="{{f1 $b.X}}" y="{{f1 .Y}}" width="{{f1 $b.W}}" height="{{f1 .H}}"/>{{end}}
+<text class="tl-label" x="{{f1 .LabelX}}" y="188" text-anchor="middle">#{{.RunID}}</text>
+</a>
+{{end}}<polyline class="tl-line tl-hosts" points="{{$t.HostsLine}}"/>
+<polyline class="tl-line tl-services" points="{{$t.ServicesLine}}"/>
+</svg>
+<ul class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
+{{range $d.Kinds}}<li class="flex items-center gap-1"><i class="tl-swatch {{.TLClass}}"></i>{{.Label}}</li>{{end}}
+<li class="flex items-center gap-1"><i class="tl-swatch tl-hosts"></i>hosts up (line, scale {{$t.MaxAssets}})</li>
+<li class="flex items-center gap-1"><i class="tl-swatch tl-services"></i>services (line)</li>
+</ul>
+<p class="mt-1 text-xs text-muted">Each bar is one finished scan (imports excluded); select it for the details.</p>
+{{else}}<p class="text-muted">The chart appears after at least two finished scans.</p>{{end}}
+</section>
+
+{{if $d.Unstable}}<section class="panel mt-4" aria-label="Unstable hosts">
+{{template "panel-title" "Unstable hosts"}}
+<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Host</th><th>Recent scans</th><th>State changes</th><th>Last seen</th></tr></thead>
+<tbody>{{range $d.Unstable}}<tr>
+<td><a class="font-mono text-brand-fg underline" href="/assets/{{.IP}}">{{.IP}}</a></td>
+<td>{{template "runs-strip" .Flips}}</td>
+<td>{{.Changes}} state change{{if ne .Changes 1}}s{{end}}</td>
+<td class="text-muted">{{ago .LastSeen}}</td>
+</tr>{{end}}</tbody></table></div>
+</section>{{end}}
+
+<section class="panel mt-4" aria-label="Runs">
+{{template "panel-title" "Runs"}}
+{{if $d.Runs}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Run</th><th>Status</th><th>Finished</th><th>Compared with</th>{{range $d.Kinds}}<th class="text-right">{{.Label}}</th>{{end}}<th class="text-right">Total</th></tr></thead>
+<tbody>{{range $d.Runs}}<tr>
+<td class="font-mono"><a class="text-brand-fg underline" href="/changes/{{.RunID}}">#{{.RunID}}</a>{{if eq .Kind "import"}} <span class="tag tag-changed">import</span>{{end}}</td>
+<td><span class="tag ml-0 {{.Status.Class}}">{{.Status.Label}}</span></td>
+<td class="text-muted">{{if .FinishedAt.IsZero}}–{{else}}{{ago .FinishedAt}}{{end}}</td>
+<td>{{if not .Applied}}<span class="text-muted">not compared</span>{{else if .PrevRunID}}<span class="font-mono">#{{.PrevRunID}}</span>{{else}}<span class="text-muted">baseline</span>{{end}}</td>
+{{range .Counts}}<td class="text-right font-mono">{{if .}}{{.}}{{else}}<span class="text-dim">0</span>{{end}}</td>{{end}}
+<td class="text-right font-mono font-semibold">{{.Total}}</td>
+</tr>{{end}}</tbody></table></div>
+{{else}}{{template "empty" (dict "Title" "No runs yet" "Text" "Changes appear after the first scan finishes." "Href" "/scans" "Link" "Go to Scans")}}{{end}}
+</section>
+{{end}}

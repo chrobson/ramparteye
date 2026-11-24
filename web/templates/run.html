@@ -1,0 +1,50 @@
+{{define "title"}}{{.Data.Title}}{{end}}
+{{define "content"}}{{$d := .Data}}{{$run := $d.Run}}
+<p class="text-muted"><a class="underline" href="/scans">Scans</a> / <span class="font-mono">#{{$run.ID}}</span></p>
+<div class="mt-1 flex flex-wrap items-center gap-2">
+<h1 class="page-title">{{$d.Title}}</h1>
+<span class="tag ml-0 {{$run.Status.Class}}" data-run-status="{{$run.Status.Key}}">{{$run.Status.Label}}</span>
+{{if eq $run.Kind "import"}}<span class="tag tag-changed">import</span>{{end}}
+</div>
+{{with $run.Status.Note}}<p role="status" class="{{if or (eq $run.Status.Key "cancelled") (eq $run.Status.Key "failed")}}alert-error{{else}}panel{{end}} mt-3">{{.}}</p>{{end}}
+
+<div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+{{template "stat" (dict "Label" "Profile" "Value" (or $run.Profile "–"))}}
+{{template "stat" (dict "Label" "Progress" "Value" (or $run.Progress "–") "Sub" (printf "%d failed chunks" $run.ChunksFail))}}
+{{template "stat" (dict "Label" "Hosts up" "Value" (num $run.HostsUp))}}
+{{template "stat" (dict "Label" "Services" "Value" (num $run.Services))}}
+{{template "stat" (dict "Label" "Duration" "Value" (or $run.Duration "–"))}}
+</div>
+
+<div class="mt-4 flex flex-wrap gap-2">
+{{if $run.Applied}}<a class="btn" href="/changes/{{$run.ID}}">Changes in this run</a>{{end}}
+{{if and $run.FinishedRun (can .Ctx "export")}}<a class="btn" href="/exchange/export.csv?run={{$run.ID}}">Download CSV</a>
+<form method="post" action="/scans/{{$run.ID}}/push" data-confirm="Push the findings of run #{{$run.ID}} to DefectDojo now?" data-confirm-ok="Push now"><button type="submit" class="btn btn-primary">Push to DefectDojo now</button></form>{{end}}
+</div>
+
+{{$rc := $d.Receipt}}<section class="panel mt-4" aria-label="Safety receipt">
+{{template "panel-title" "Safety receipt"}}
+{{if $rc.Missing}}<p class="text-muted">No safety receipt for this run: it is an import, it has not started yet, or it predates receipts.</p>
+{{else}}<p class="flex flex-wrap items-center gap-2"><span class="check {{$rc.StatusClass}}" data-report-status="{{$rc.Status}}">{{$rc.StatusLabel}}</span>
+<span class="text-xs text-muted">Measured by the scanner during the run, not declared. JSON: <a class="underline" href="/runs/{{$run.ID}}/safety.json">/runs/{{$run.ID}}/safety.json</a> · CLI: <code class="font-mono">ramparteye audit {{$run.ID}}</code></span></p>
+<div class="mt-2 overflow-x-auto"><table class="tbl">
+<thead><tr><th>Check</th><th>Result</th><th>Measured</th><th>Detail</th></tr></thead>
+<tbody>{{range $rc.Checks}}<tr data-check-status="{{.Status}}">
+<td>{{.Name}}</td>
+<td><span class="check {{.Class}}">{{.Label}}</span></td>
+<td class="font-mono text-xs">{{.Measured}}</td>
+<td class="text-muted">{{.Detail}}</td>
+</tr>{{end}}</tbody></table></div>
+{{with $rc.Report}}<details class="mt-2"><summary class="cursor-pointer text-xs text-muted">Measurement details ({{.NmapInvocations}} nmap runs, argv sha256 <span class="font-mono">{{$rc.ArgvShort}}</span>)</summary>
+<dl class="mt-2 grid gap-1 text-xs">
+<div><dt class="lbl">nmap packets</dt><dd>{{.NmapPackets}} ({{.NmapRawReported}} of {{.NmapInvocations}} runs reported nmap's raw packet counter)</dd></div>
+<div><dt class="lbl">nmap time</dt><dd>{{.NmapBusyMs}} ms busy ({{.NmapElapsedMs}} ms summed over runs)</dd></div>
+<div><dt class="lbl">Limits</dt><dd>run budget {{.ConfiguredMaxRate}}/s, policy {{.PolicyPPS}}/s, per process {{.PerWorkerRate}}/s</dd></div>
+<div><dt class="lbl">HTTP</dt><dd>GET {{.HTTPGet}}, HEAD {{.HTTPHead}}, other {{.HTTPOther}}</dd></div>
+{{range .ArgvSample}}<div><dt class="lbl">Command</dt><dd class="font-mono break-all">nmap {{.}}</dd></div>{{end}}
+</dl>
+{{if .Notes}}<ul class="mt-2 list-disc pl-5 text-xs text-muted">{{range .Notes}}<li>{{.}}</li>{{end}}</ul>{{end}}
+</details>{{end}}
+{{end}}
+</section>
+{{end}}

@@ -72,6 +72,9 @@ func (s *Server) funcs(hashes map[string]string) template.FuncMap {
 		"dict":        dict,
 		"cellOf":      cellOf,
 		"asset":       assetFunc(hashes),
+		"hasID":       hasID,
+		"sub":         func(a, b int) int { return a - b },
+		"f1":          f1,
 	}
 }
 

@@ -250,4 +250,85 @@
   [data-tab][aria-selected="true"] {
     @apply border-b-2 border-brand text-brand-fg;
   }
+
+  /* Safety receipt: pass, fail and unmeasured must never look alike. */
+  .check {
+    @apply inline-flex items-center gap-1 rounded px-1.5 py-px text-[11px] font-semibold;
+  }
+  .check-pass {
+    @apply bg-new-bg text-new;
+  }
+  .check-pass::before {
+    content: "✓";
+  }
+  .check-fail {
+    @apply bg-gone-bg text-gone ring-1 ring-inset ring-bad-line;
+  }
+  .check-fail::before {
+    content: "✗";
+  }
+  .check-unmeasured {
+    @apply border border-dashed border-med bg-med-bg text-med;
+  }
+  .check-unmeasured::before {
+    content: "?";
+  }
+
+  /* Change timeline (inline SVG). */
+  .tl {
+    @apply block h-auto w-full;
+  }
+  .tl-axis {
+    @apply stroke-edge;
+  }
+  .tl-scale,
+  .tl-label {
+    @apply fill-dim text-[10px];
+  }
+  .tl-slot {
+    @apply fill-transparent;
+  }
+  .tl-bar:hover .tl-slot,
+  .tl-bar:focus .tl-slot {
+    @apply fill-row;
+  }
+  .tl-line {
+    @apply fill-none;
+    stroke-width: 1.5;
+  }
+  .tl-swatch {
+    @apply inline-block h-2.5 w-2.5 rounded-sm;
+  }
+  .tl-host_up {
+    @apply fill-low bg-low;
+  }
+  .tl-host_down {
+    @apply fill-high bg-high;
+  }
+  .tl-unstable {
+    @apply fill-med bg-med;
+  }
+  .tl-new {
+    @apply fill-ok bg-ok;
+  }
+  .tl-gone {
+    @apply fill-bad bg-bad;
+  }
+  .tl-changed {
+    @apply fill-info bg-info;
+  }
+  line.tl-hosts,
+  polyline.tl-hosts {
+    @apply stroke-fg;
+  }
+  .tl-swatch.tl-hosts {
+    @apply bg-fg;
+  }
+  polyline.tl-services {
+    @apply stroke-muted;
+    stroke-dasharray: 4 3;
+  }
+  .tl-swatch.tl-services {
+    @apply bg-muted;
+  }
 }

@@ -1,0 +1,60 @@
+{{define "title"}}Targets{{end}}
+{{define "content"}}{{$d := .Data}}{{$w := can .Ctx "targets.write"}}
+<h1 class="page-title">Targets</h1>
+<section class="panel mt-4" aria-label="Scan scope">
+{{template "panel-title" "Scan scope (read-only)"}}
+{{if $d.Scope}}<p>Only targets inside {{range $i, $p := $d.Scope}}{{if $i}}, {{end}}<span class="font-mono">{{$p}}</span>{{end}} are accepted{{with $d.Excluded}}; never scanned: {{range $i, $a := .}}{{if $i}}, {{end}}<span class="font-mono">{{$a}}</span>{{end}}{{end}}.</p>
+<p class="mt-1 text-xs text-muted">Domains are resolved when added: every address must be inside the scope. The scope is set by RAMPART_ALLOWED_CIDRS and checked again before every scan.</p>
+{{else}}<p role="alert" class="alert-error">No scan scope configured: set RAMPART_ALLOWED_CIDRS. Target imports and scans are refused until a scope is set.</p>{{end}}
+</section>
+
+{{with $d.Error}}<p role="alert" class="alert-error mt-4">{{.}}</p>{{end}}
+{{with $d.Report}}<section class="panel mt-4" role="status" aria-label="Import report">
+{{template "panel-title" "Import report"}}
+<p><b>{{.Added}} added</b> · {{.Present}} already present · {{.RefusedTotal}} refused{{if ne .Source "form"}} · from <span class="font-mono">{{template "cell" (dict "Value" .Source "Max" 60)}}</span>{{end}}</p>
+{{if .Refused}}<h3 class="lbl mt-3">Refused</h3>
+<div class="overflow-x-auto"><table class="tbl"><thead><tr><th>Line</th><th>Value</th><th>Reason</th></tr></thead>
+<tbody>{{range .Refused}}<tr><td class="font-mono">{{if .Line}}{{.Line}}{{else}}–{{end}}</td><td class="font-mono">{{template "cell" (dict "Value" .Value "Max" 60)}}</td><td class="text-bad">{{template "cell" (dict "Value" .Reason "Max" 120)}}</td></tr>{{end}}</tbody></table></div>
+{{if gt .RefusedTotal (len .Refused)}}<p class="mt-1 text-xs text-muted">and {{sub .RefusedTotal (len .Refused)}} more not listed.</p>{{end}}{{end}}
+</section>{{end}}
+
+{{if $w}}<div class="mt-4 grid gap-3 lg:grid-cols-2">
+<form method="post" action="/targets" class="panel grid content-start gap-2">
+{{template "panel-title" "Add targets"}}
+<label><span class="lbl">IP addresses, CIDRs, ranges or domains, one per line; optional tags after a space</span>
+<textarea name="values" rows="6" required class="input" placeholder="10.20.0.0/24 lab;web&#10;10.20.1.10&#10;app.lab.internal">{{$d.Values}}</textarea></label>
+<label><span class="lbl">Tags for all, separated by ;</span><input name="tags" class="input" placeholder="lab;web"></label>
+<div><button type="submit" class="btn btn-primary">Add targets</button></div>
+</form>
+<form method="post" action="/targets/import" enctype="multipart/form-data" class="panel grid content-start gap-2">
+{{template "panel-title" "Import a file"}}
+<label><span class="lbl">CSV (value,tags with tags separated by ;) or JSON ([{"value": "...", "tags": []}])</span>
+<input name="file" type="file" required accept=".csv,.json,.txt,text/csv,application/json,text/plain" class="input"></label>
+<label><span class="lbl">Extra tags for every row, separated by ;</span><input name="tags" class="input" placeholder="import"></label>
+<p class="text-xs text-muted">An invalid row stops the import; rows outside the scope are listed as refused and never stored.</p>
+<div><button type="submit" class="btn">Import file</button></div>
+</form>
+</div>{{end}}
+
+<section class="panel mt-4" aria-label="Targets">
+<div class="mb-2 flex flex-wrap items-end justify-between gap-2">
+<p class="text-muted">{{len $d.Targets}} target{{if ne (len $d.Targets) 1}}s{{end}} ({{$d.Counts.IP}} IP, {{$d.Counts.CIDR}} CIDR, {{$d.Counts.Range}} range, {{$d.Counts.Domain}} domain) · {{$d.Counts.Addrs}} addresses in ranges</p>
+<form method="get" action="/targets" class="flex items-end gap-2">
+<label><span class="lbl">Tag</span><select name="tag" class="input"><option value="">All</option>{{range $d.Tags}}<option value="{{.}}"{{if eq . $d.Filter}} selected{{end}}>{{.}}</option>{{end}}</select></label>
+<button type="submit" class="btn">Filter</button>
+</form>
+</div>
+{{if $d.Targets}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Value</th><th>Kind</th><th>Addresses</th><th>Tags</th>{{if $w}}<th></th>{{end}}</tr></thead>
+<tbody>{{range $d.Targets}}<tr>
+<td class="font-mono">{{.Value}}</td>
+<td>{{.Kind}}</td>
+<td class="font-mono">{{.Addrs}}</td>
+<td>{{if $w}}<form method="post" action="/targets/{{.ID}}/tags" class="flex gap-1"><input name="tags" class="input max-w-xs" value="{{.TagsText}}" aria-label="Tags of {{.Value}}"><button type="submit" class="btn btn-sm">Save</button></form>
+{{else}}{{range .Tags}}<span class="tag tag-changed">{{.}}</span>{{else}}<span class="text-dim">–</span>{{end}}{{end}}</td>
+{{if $w}}<td><form method="post" action="/targets/{{.ID}}/delete" data-confirm="Delete target {{.Value}}?" data-confirm-ok="Delete"><button type="submit" class="btn btn-sm">Delete</button></form></td>{{end}}
+</tr>{{end}}</tbody></table></div>
+{{else if $d.Filter}}{{template "empty" (dict "Title" "No targets with this tag" "Text" "Choose another tag or clear the filter.")}}
+{{else}}{{template "empty" (dict "Title" "No targets yet" "Text" "Add the networks and hosts you own; scan profiles scan them.")}}{{end}}
+</section>
+{{end}}
