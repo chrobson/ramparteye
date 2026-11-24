@@ -172,17 +172,21 @@ func plainSummary(a diff.Availability) string {
 	case diff.PatternAlways:
 		return "Seen in every scan that covered it."
 	case diff.PatternOfficeHours:
-		end := "rarely outside those hours"
-		weekend := 0
+		seen, total := 0, 0
 		for _, d := range []int{5, 6} {
 			for _, c := range a.Week[d] {
-				weekend += c.Seen
+				seen += c.Seen
+				total += c.Total
 			}
 		}
-		if weekend == 0 {
-			end = "never at weekends"
+		out := "Up mostly 07–17 on weekdays"
+		switch {
+		case total == 0: // no weekend scans: nothing to say about weekends
+			return out + "."
+		case seen == 0:
+			return out + ", never at weekends."
 		}
-		return "Up mostly 07–17 on weekdays, " + end + "."
+		return out + ", rarely outside those hours."
 	case diff.PatternIntermittent:
 		return fmt.Sprintf("Seen in %d of %d scans, with no time-of-day pattern.", a.Seen, a.Total)
 	case diff.PatternIrregular:

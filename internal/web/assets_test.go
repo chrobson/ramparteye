@@ -563,6 +563,27 @@ func TestPlainSummary(t *testing.T) {
 		assert.Equal(t, diff.PatternOfficeHours, a.Pattern)
 		assert.Equal(t, "Up mostly 07–17 on weekdays, never at weekends.", plainSummary(a))
 	})
+	t.Run("office hours, weekends seen", func(t *testing.T) {
+		var a diff.Availability
+		a.Pattern = diff.PatternOfficeHours
+		a.Week[5][3] = diff.Cell{Seen: 1, Total: 2}
+
+		assert.Equal(t, "Up mostly 07–17 on weekdays, rarely outside those hours.", plainSummary(a))
+	})
+	t.Run("office hours, no weekend scans", func(t *testing.T) {
+		var runs []diff.RunPresence
+		mon := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC)
+		for d := range 5 {
+			day := mon.AddDate(0, 0, d)
+			runs = append(runs,
+				diff.RunPresence{At: day.Add(10 * time.Hour), Covered: true, Seen: true},
+				diff.RunPresence{At: day.Add(22 * time.Hour), Covered: true, Seen: false})
+		}
+		a := diff.ComputeAvailability(runs, time.UTC)
+
+		assert.Equal(t, diff.PatternOfficeHours, a.Pattern)
+		assert.Equal(t, "Up mostly 07–17 on weekdays.", plainSummary(a))
+	})
 	t.Run("always", func(t *testing.T) {
 		a := diff.ComputeAvailability([]diff.RunPresence{{At: testNow, Covered: true, Seen: true}}, time.UTC)
 
