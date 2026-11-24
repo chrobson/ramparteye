@@ -47,7 +47,8 @@
   .chip-bad {
     @apply border-bad-line text-bad;
   }
-  .chip-off {
+  .chip-off,
+  .chip-idle {
     @apply text-muted;
   }
   a.chip:hover {

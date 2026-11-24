@@ -1,3 +1,3 @@
-{{/* Status chip. Data: Chip{Text, Kind (chip-ok|chip-bad|chip-off), Href}. */}}
+{{/* Status chip. Data: Chip{Text, Kind (chip-ok|chip-bad|chip-idle|chip-off), Href}. */}}
 {{define "chip"}}{{if .Href}}<a href="{{.Href}}" class="chip {{.Kind}}">{{template "chip-body" .}}</a>{{else}}<span class="chip {{.Kind}}">{{template "chip-body" .}}</span>{{end}}{{end}}
-{{define "chip-body"}}{{if eq .Kind "chip-ok"}}<span aria-hidden="true">●</span>{{else if eq .Kind "chip-bad"}}<span aria-hidden="true">▲</span>{{end}}{{.Text}}{{end}}
+{{define "chip-body"}}{{if or (eq .Kind "chip-ok") (eq .Kind "chip-idle")}}<span aria-hidden="true">●</span>{{else if eq .Kind "chip-bad"}}<span aria-hidden="true">▲</span>{{end}}{{.Text}}{{end}}

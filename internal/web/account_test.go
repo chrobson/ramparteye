@@ -213,7 +213,7 @@ func TestForcedPasswordChange(t *testing.T) {
 	assert.Equal(t, "user.password", e.st.lastAudit().Action)
 	assert.Equal(t, u.ID, *e.st.lastAudit().UserID)
 
-	assert.Equal(t, http.StatusOK, e.get("/", c).Code)
+	assert.Equal(t, http.StatusOK, e.get("/", sessionCookie(ok)).Code)
 }
 
 func TestVoluntaryPasswordChangeUsesShell(t *testing.T) {
@@ -236,4 +236,65 @@ func TestPasswordPageRequiresLogin(t *testing.T) {
 	post := e.post(auth.PasswordPath, pwForm("a", "b", "b"), nil)
 	assert.Equal(t, http.StatusSeeOther, post.Code)
 	assert.Equal(t, "/login?next=%2F", post.Header().Get("Location"))
+}
+
+func TestPasswordChangeRevokesOtherSessions(t *testing.T) {
+	e := newEnv(t)
+	u := e.st.addUser(t, "admin", "initial-pass", auth.RoleAdmin, false)
+	current, other := e.st.session(u.ID), e.st.session(u.ID)
+
+	rec := e.post(auth.PasswordPath, pwForm("initial-pass", "new-password-1", "new-password-1"), current)
+
+	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	fresh := sessionCookie(rec)
+	assert.NotNil(t, fresh)
+	assert.NotEqual(t, current.Value, fresh.Value)
+	assert.Equal(t, http.StatusSeeOther, e.get("/", other).Code)
+	assert.Equal(t, http.StatusSeeOther, e.get("/", current).Code)
+	assert.Equal(t, http.StatusOK, e.get("/", fresh).Code)
+	assert.Equal(t, 1, e.st.sessionCount())
+}
+
+func TestPasswordChangeThrottlesWrongCurrent(t *testing.T) {
+	e := newEnv(t)
+	u := e.st.addUser(t, "admin", "initial-pass", auth.RoleAdmin, false)
+	c := e.st.session(u.ID)
+	for range auth.MaxLoginFailures {
+		rec := e.post(auth.PasswordPath, pwForm("wrong-pass", "new-password-1", "new-password-1"), c)
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	}
+	assert.Equal(t, "user.password.failed", e.st.lastAudit().Action)
+
+	rec := e.post(auth.PasswordPath, pwForm("initial-pass", "new-password-1", "new-password-1"), c)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	assert.NotEqual(t, "", rec.Header().Get("Retry-After"))
+	assert.True(t, auth.CheckPassword(e.st.user(u.ID).PasswordHash, "initial-pass"))
+}
+
+func TestLoginLockedIsAudited(t *testing.T) {
+	e := newEnv(t)
+	e.st.addUser(t, "admin", "correct-horse", auth.RoleAdmin, false)
+	for range auth.MaxLoginFailures {
+		e.post("/login", loginForm("admin", "wrong-password", ""), nil)
+	}
+
+	e.post("/login", loginForm("admin", "correct-horse", ""), nil)
+
+	a := e.st.lastAudit()
+	assert.Equal(t, "login.locked", a.Action)
+	assert.Equal(t, map[string]any{"login": "admin", "ip": "203.0.113.5"}, a.Details)
+}
+
+func TestLoginReplacesExistingSession(t *testing.T) {
+	e := newEnv(t)
+	u := e.st.addUser(t, "admin", "correct-horse", auth.RoleAdmin, false)
+	old := e.st.session(u.ID)
+
+	rec := e.post("/login", loginForm("admin", "correct-horse", ""), old)
+
+	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Equal(t, 1, e.st.sessionCount())
+	assert.Equal(t, http.StatusSeeOther, e.get("/", old).Code)
+	assert.Equal(t, http.StatusOK, e.get("/", sessionCookie(rec)).Code)
 }

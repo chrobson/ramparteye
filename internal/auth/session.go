@@ -98,38 +98,69 @@ func NewAuthenticator(users UserStore, sessions SessionStore, now func() time.Ti
 }
 
 // Login checks the credentials and creates a session. ip is the client
-// address used for throttling; it must be the bare host without a port. It returns the cookie token and expiry.
-// Errors: ErrLocked, ErrBadCredentials, or a storage error.
+// address used for throttling; it must be the bare host without a port. It
+// returns the cookie token and expiry.
+// Errors: ErrLocked (*LockedError), ErrBadCredentials, or a storage error.
 func (a *Authenticator) Login(ctx context.Context, login, password, ip string) (string, time.Time, error) {
+	u, res, err := a.verify(ctx, login, password, ip)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	tok, expires, err := a.NewSession(ctx, u.ID)
+	if err != nil {
+		a.throttle.release(res, false)
+		return "", time.Time{}, err
+	}
+	a.throttle.release(res, true)
+	return tok, expires, nil
+}
+
+// Verify checks a password like Login, throttled and counted the same way,
+// without creating a session (re-authentication, e.g. a password change).
+func (a *Authenticator) Verify(ctx context.Context, login, password, ip string) error {
+	_, res, err := a.verify(ctx, login, password, ip)
+	if err == nil {
+		a.throttle.release(res, true)
+	}
+	return err
+}
+
+// verify counts the attempt against the throttle and checks the password.
+// On success the caller must release the reservation.
+func (a *Authenticator) verify(ctx context.Context, login, password, ip string) (store.User, reservation, error) {
 	if len(login) > MaxLoginLen {
-		return "", time.Time{}, ErrBadCredentials
+		return store.User{}, reservation{}, ErrBadCredentials
 	}
 	keys := throttleKeys(login, ip)
 	// The attempt is counted before verification so concurrent guesses
 	// cannot all pass the limit check.
 	res, ok, wait := a.throttle.reserve(keys...)
 	if !ok {
-		return "", time.Time{}, &LockedError{Wait: wait}
+		return store.User{}, reservation{}, &LockedError{Wait: wait}
 	}
 	u, err := a.Users.UserByLogin(ctx, login)
 	switch {
 	case errors.Is(err, store.ErrUserNotFound):
 		a.check(dummyHash(), password) // equalise timing
-		return "", time.Time{}, ErrBadCredentials
+		return store.User{}, reservation{}, ErrBadCredentials
 	case err != nil:
 		a.throttle.release(res, false)
-		return "", time.Time{}, err
+		return store.User{}, reservation{}, err
 	}
 	if !a.check(u.PasswordHash, password) {
-		return "", time.Time{}, ErrBadCredentials
+		return store.User{}, reservation{}, ErrBadCredentials
 	}
+	return u, res, nil
+}
+
+// NewSession creates a session for userID and returns the cookie token and
+// expiry. Expired sessions are purged on the way (failures only logged).
+func (a *Authenticator) NewSession(ctx context.Context, userID int64) (string, time.Time, error) {
 	tok := newToken()
 	expires := a.now().Add(SessionTTL)
-	if err := a.Sessions.CreateSession(ctx, HashToken(tok), u.ID, expires); err != nil {
-		a.throttle.release(res, false)
+	if err := a.Sessions.CreateSession(ctx, HashToken(tok), userID, expires); err != nil {
 		return "", time.Time{}, err
 	}
-	a.throttle.release(res, true)
 	if _, err := a.Sessions.DeleteExpiredSessions(ctx); err != nil {
 		slog.Error("delete expired sessions", "err", err)
 	}
@@ -209,23 +240,38 @@ func passwordChangeExempt(path string) bool {
 	return path == PasswordPath || path == LogoutPath || strings.HasPrefix(path, StaticPrefix)
 }
 
-// Require demands perm. No session: 401 for API and htmx requests, else a
-// 303 to /login. Missing permission: 403.
+// Require demands perm. No session: see RequireUser. Missing permission:
+// a plain 403.
 func Require(perm Perm) func(http.Handler) http.Handler {
+	return RequireWith(perm, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden: missing permission "+string(perm), http.StatusForbidden)
+	}))
+}
+
+// RequireWith is Require with forbidden serving requests whose user lacks
+// perm.
+func RequireWith(perm Perm, forbidden http.Handler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			u, ok := CurrentUser(r.Context())
-			if !ok {
-				unauthorized(w, r)
-				return
-			}
-			if !u.Can(perm) {
-				http.Error(w, "forbidden: missing permission "+string(perm), http.StatusForbidden)
+		return RequireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !Can(r.Context(), perm) {
+				forbidden.ServeHTTP(w, r)
 				return
 			}
 			next.ServeHTTP(w, r)
-		})
+		}))
 	}
+}
+
+// RequireUser demands a session: 401 for API and htmx requests, else a 303
+// to /login (see Unauthorized).
+func RequireUser(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := CurrentUser(r.Context()); !ok {
+			Unauthorized(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // IsAPIRequest reports whether the client expects an error status instead
@@ -238,7 +284,10 @@ func IsAPIRequest(r *http.Request) bool {
 	return strings.Contains(acc, "application/json") && !strings.Contains(acc, "text/html")
 }
 
-func unauthorized(w http.ResponseWriter, r *http.Request) {
+// Unauthorized answers a request that needs a session: 401 (with
+// HX-Redirect for htmx) for API requests, else a 303 to /login carrying the
+// current page as next (GET only).
+func Unauthorized(w http.ResponseWriter, r *http.Request) {
 	if IsAPIRequest(r) {
 		if r.Header.Get("HX-Request") == "true" {
 			w.Header().Set("HX-Redirect", "/login")

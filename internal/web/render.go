@@ -60,7 +60,7 @@ func parsePages(fsys fs.FS, funcs template.FuncMap) (*pages, error) {
 	return p, nil
 }
 
-func (s *Server) funcs() template.FuncMap {
+func (s *Server) funcs(hashes map[string]string) template.FuncMap {
 	return template.FuncMap{
 		"sevClass":    sevClass,
 		"changeClass": changeClass,
@@ -70,7 +70,7 @@ func (s *Server) funcs() template.FuncMap {
 		"num":         num,
 		"dict":        dict,
 		"cellOf":      cellOf,
-		"asset":       assetFunc(s.static),
+		"asset":       assetFunc(hashes),
 	}
 }
 
@@ -237,12 +237,11 @@ func truncate(s string, n int) string {
 	return s
 }
 
-// assetFunc returns the URL of a static file with a content hash, so the
-// files can be cached and still change on upgrade. Hashes are computed
-// once, up front.
-func assetFunc(static fs.FS) func(string) (string, error) {
+// assetHashes returns a short content hash of every static file, so asset
+// URLs can be cached and still change on upgrade.
+func assetHashes(static fs.FS) (map[string]string, error) {
 	hashes := map[string]string{}
-	_ = fs.WalkDir(static, ".", func(p string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(static, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -254,6 +253,11 @@ func assetFunc(static fs.FS) func(string) (string, error) {
 		hashes[p] = hex.EncodeToString(sum[:6])
 		return nil
 	})
+	return hashes, err
+}
+
+// assetFunc returns the URL of a static file with its content hash.
+func assetFunc(hashes map[string]string) func(string) (string, error) {
 	return func(name string) (string, error) {
 		h, ok := hashes[name]
 		if !ok {

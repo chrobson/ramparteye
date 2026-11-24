@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -90,8 +91,9 @@ func (f *fakeStore) addUser(t *testing.T, login, password, role string, mustChan
 
 // session stores a session for userID and returns its cookie.
 func (f *fakeStore) session(userID int64) *http.Cookie {
-	tok := "tok-" + time.Now().Format("150405.000000000")
 	f.mu.Lock()
+	f.nextID++
+	tok := fmt.Sprintf("tok-%d", f.nextID)
 	f.sessions[string(auth.HashToken(tok))] = fakeSession{userID: userID, expires: testNow.Add(time.Hour)}
 	f.mu.Unlock()
 	return &http.Cookie{Name: auth.CookieName, Value: tok}
@@ -153,6 +155,17 @@ func (f *fakeStore) DeleteSession(_ context.Context, tokenHash []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.sessions, string(tokenHash))
+	return nil
+}
+
+func (f *fakeStore) DeleteUserSessions(_ context.Context, userID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for k, s := range f.sessions {
+		if s.userID == userID {
+			delete(f.sessions, k)
+		}
+	}
 	return nil
 }
 

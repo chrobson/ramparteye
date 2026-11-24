@@ -97,8 +97,9 @@ module.exports = {
         Object.keys(dark).map((k) => [k, `rgb(var(--c-${k}) / <alpha-value>)`]),
       ),
       fontFamily: {
-        sans: ['"IBM Plex Sans"', "Inter", "system-ui", "sans-serif"],
-        mono: ['"IBM Plex Mono"', "ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+        // System fonts only: no web fonts are shipped.
+        sans: ["system-ui", "-apple-system", '"Segoe UI"', "Roboto", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "Consolas", "monospace"],
       },
     },
   },

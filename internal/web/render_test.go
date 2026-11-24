@@ -198,7 +198,7 @@ func TestScanChip(t *testing.T) {
 	e := newEnv(t)
 	c := e.login(t, auth.RoleViewer)
 
-	assert.Contain(t, "No scan running", e.get("/", c).Body.String())
+	assert.Contain(t, `class="chip chip-idle"><span aria-hidden="true">●</span>Idle</a>`, e.get("/", c).Body.String())
 
 	e.runner.active = []int64{7}
 	assert.Contain(t, "Scan #7 running", e.get("/", c).Body.String())

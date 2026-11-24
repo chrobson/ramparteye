@@ -520,3 +520,44 @@ func TestFloodCannotEvictLock(t *testing.T) {
 	assert.ErrorIs(t, ErrLocked, err)
 	assert.True(t, len(a.throttle.failures) <= 300)
 }
+
+func TestRequireWithCustomForbidden(t *testing.T) {
+	f := newFake(mkUser(1, "vic", RoleViewer, "password-1", false))
+	forbidden := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	})
+	h := Middleware(f, func() time.Time { return t0 })(RequireWith(PermResultsEdit, forbidden)(okHandler()))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, reqWithCookie("GET", "/x", loginAs(t, f, "vic", "password-1")))
+	assert.Equal(t, http.StatusTeapot, rec.Code)
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/x?a=1", nil))
+	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Equal(t, "/login?next=%2Fx%3Fa%3D1", rec.Header().Get("Location"))
+}
+
+func TestVerifyIsThrottledAndCreatesNoSession(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	ctx := context.Background()
+
+	assert.NoError(t, a.Verify(ctx, "ann", "right-password", "10.0.0.1"))
+	for range MaxLoginFailures {
+		assert.ErrorIs(t, ErrBadCredentials, a.Verify(ctx, "ann", "wrong-password", "10.0.0.1"))
+	}
+	assert.ErrorIs(t, ErrLocked, a.Verify(ctx, "ann", "right-password", "10.0.0.1"))
+	assert.Len(t, 0, f.sessions)
+}
+
+func TestNewSession(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+
+	tok, exp, err := a.NewSession(context.Background(), 1)
+
+	assert.NoError(t, err)
+	assert.Equal(t, t0.Add(SessionTTL), exp)
+	assert.Equal(t, int64(1), f.sessions[string(HashToken(tok))].userID)
+}

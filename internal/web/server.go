@@ -9,12 +9,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"strings"
 	"time"
 
@@ -35,6 +35,7 @@ type Store interface {
 	auth.UserStore
 	UserByID(ctx context.Context, id int64) (store.User, error)
 	SetPassword(ctx context.Context, userID int64, hash string, mustChange bool) error
+	DeleteUserSessions(ctx context.Context, userID int64) error
 	InsertAudit(ctx context.Context, userID *int64, action, entity string, details any) error
 }
 
@@ -104,15 +105,23 @@ func NewServer(d Deps) (*Server, error) {
 }
 
 func newServer(d Deps, tmpl fs.FS, now func() time.Time) (*Server, error) {
+	return newServerFS(d, tmpl, webassets.Static, now)
+}
+
+func newServerFS(d Deps, tmpl, static fs.FS, now func() time.Time) (*Server, error) {
 	if d.Store == nil {
 		return nil, errors.New("web: Deps.Store is required")
 	}
-	s := &Server{d: d, log: d.Log, now: now, static: webassets.Static, instance: InstanceID(d.Cfg)}
+	s := &Server{d: d, log: d.Log, now: now, static: static, instance: InstanceID(d.Cfg)}
 	if s.log == nil {
 		s.log = slog.Default()
 	}
 	s.auth = auth.NewAuthenticator(d.Store, d.Store, now)
-	p, err := parsePages(tmpl, s.funcs())
+	hashes, err := assetHashes(static)
+	if err != nil {
+		return nil, fmt.Errorf("web: hash static files: %w", err)
+	}
+	p, err := parsePages(tmpl, s.funcs(hashes))
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +145,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/login", s.loginPage)
 		r.Post("/login", s.loginSubmit)
 		r.Post(auth.LogoutPath, s.logout)
-		r.With(s.requireUser).Get(auth.PasswordPath, s.passwordPage)
-		r.With(s.requireUser).Post(auth.PasswordPath, s.passwordSubmit)
+		r.With(auth.RequireUser).Get(auth.PasswordPath, s.passwordPage)
+		r.With(auth.RequireUser).Post(auth.PasswordPath, s.passwordSubmit)
 
 		// Placeholder pages; Tasks 21-24 replace them.
 		for _, n := range navItems {
@@ -154,45 +163,12 @@ func (s *Server) stubPage(title string) http.HandlerFunc {
 	}
 }
 
-// requireUser demands a session: 401 for API and htmx requests, else a 303
-// to /login with the current page as next (GET only).
-func (s *Server) requireUser(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := auth.CurrentUser(r.Context()); !ok {
-			unauthorized(w, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // require demands a session and perm; a missing permission gets the
 // themed 403 page.
 func (s *Server) require(perm auth.Perm) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return s.requireUser(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !auth.Can(r.Context(), perm) {
-				s.forbidden(w, r, perm)
-				return
-			}
-			next.ServeHTTP(w, r)
-		}))
-	}
-}
-
-func unauthorized(w http.ResponseWriter, r *http.Request) {
-	if auth.IsAPIRequest(r) {
-		if r.Header.Get("HX-Request") == "true" {
-			w.Header().Set("HX-Redirect", "/login")
-		}
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	next := r.URL.RequestURI()
-	if r.Method != http.MethodGet {
-		next = "/"
-	}
-	http.Redirect(w, r, "/login?next="+url.QueryEscape(next), http.StatusSeeOther)
+	return auth.RequireWith(perm, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.forbidden(w, r, perm)
+	}))
 }
 
 func (s *Server) staticHandler() http.Handler {
@@ -200,6 +176,10 @@ func (s *Server) staticHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/") {
 			http.NotFound(w, r) // no directory listings
+			return
+		}
+		if st, err := fs.Stat(s.static, strings.TrimPrefix(r.URL.Path, "/")); err != nil || st.IsDir() {
+			http.NotFound(w, r)
 			return
 		}
 		// Asset URLs carry a content hash (?v=), so they may be cached.

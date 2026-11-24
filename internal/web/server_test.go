@@ -1,16 +1,20 @@
 package web
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ctx42/testing/pkg/assert"
 
 	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/config"
+	webassets "github.com/chrobson/ramparteye/web"
 )
 
 func TestSecurityHeaders(t *testing.T) {
@@ -211,3 +215,23 @@ func TestSafeNext(t *testing.T) {
 		assert.Equal(t, want, safeNext(in), "next %q", in)
 	}
 }
+
+func TestStaticCacheOnlyOnSuccess(t *testing.T) {
+	e := newEnv(t)
+
+	assert.Equal(t, "", e.get("/static/missing.js", nil).Header().Get("Cache-Control"))
+	assert.Equal(t, "", e.get("/static/", nil).Header().Get("Cache-Control"))
+	assert.Contain(t, "max-age", e.get("/static/app.js", nil).Header().Get("Cache-Control"))
+}
+
+func TestNewServerFailsOnUnreadableStatic(t *testing.T) {
+	d := newEnv(t).srv.d
+	_, err := newServerFS(d, webassets.Templates, badFS{}, time.Now)
+
+	assert.ErrorContain(t, "static", err)
+}
+
+// badFS fails every operation.
+type badFS struct{}
+
+func (badFS) Open(string) (fs.File, error) { return nil, errors.New("disk on fire") }

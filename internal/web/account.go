@@ -49,15 +49,13 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	var locked *auth.LockedError
 	switch {
 	case errors.As(err, &locked):
-		w.Header().Set("Retry-After", strconv.Itoa(int(locked.Wait.Seconds())+1))
+		logged := loggedLogin(login)
+		s.audit(r, nil, "login.locked", "user:"+logged, map[string]any{"login": logged, "ip": ip})
 		s.renderStatus(w, r, http.StatusTooManyRequests, "login", loginData{Next: next, Login: login,
-			Error: "Too many failed logins. Try again in " + strconv.Itoa(int(locked.Wait.Minutes())+1) + " min."})
+			Error: lockedMessage(w, "logins", locked)})
 		return
 	case errors.Is(err, auth.ErrBadCredentials):
-		logged := login
-		if len(logged) > maxLoggedLogin {
-			logged = strings.ToValidUTF8(logged[:maxLoggedLogin], "")
-		}
+		logged := loggedLogin(login)
 		s.audit(r, nil, "login.failed", "user:"+logged, map[string]any{"login": logged, "ip": ip})
 		s.renderStatus(w, r, http.StatusUnauthorized, "login", loginData{Next: next, Login: login,
 			Error: "Invalid login or password."})
@@ -66,6 +64,10 @@ func (s *Server) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		s.log.Error("login", "err", err)
 		s.serverError(w, r)
 		return
+	}
+	// A session already on this browser is replaced, not left behind.
+	if err := s.auth.Logout(ctx, r); err != nil {
+		s.log.Warn("delete previous session on login", "err", err)
 	}
 	auth.SetSessionCookie(w, r, tok, exp, s.now())
 	var uid *int64
@@ -112,16 +114,27 @@ func (s *Server) passwordSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cur, next, confirm := r.PostForm.Get("current"), r.PostForm.Get("new"), r.PostForm.Get("confirm")
-	su, err := s.d.Store.UserByID(ctx, u.ID)
-	if err != nil {
-		s.log.Error("load user for password change", "err", err)
+	// The current password is checked like a login: throttled per login
+	// and client address.
+	ip := clientIP(r, s.d.Cfg.TrustedProxies)
+	err := s.auth.Verify(ctx, u.Login, cur, ip)
+	var locked *auth.LockedError
+	switch {
+	case errors.As(err, &locked):
+		s.audit(r, &u.ID, "user.password.locked", "user:"+u.Login, map[string]any{"ip": ip})
+		s.renderStatus(w, r, http.StatusTooManyRequests, "password",
+			passwordData{Forced: u.MustChangePassword, Error: lockedMessage(w, "password checks", locked)})
+		return
+	case errors.Is(err, auth.ErrBadCredentials):
+		s.audit(r, &u.ID, "user.password.failed", "user:"+u.Login, map[string]any{"ip": ip})
+		fail("Current password is incorrect.")
+		return
+	case err != nil:
+		s.log.Error("verify current password", "err", err)
 		s.serverError(w, r)
 		return
 	}
 	switch {
-	case !auth.CheckPassword(su.PasswordHash, cur):
-		fail("Current password is incorrect.")
-		return
 	case next != confirm:
 		fail("The new passwords do not match.")
 		return
@@ -147,8 +160,37 @@ func (s *Server) passwordSubmit(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r)
 		return
 	}
+	// Every session of the user, on any device, ends with the old password;
+	// this browser gets a fresh one.
+	if err := s.d.Store.DeleteUserSessions(ctx, u.ID); err != nil {
+		s.log.Error("revoke sessions after password change", "err", err)
+		s.serverError(w, r)
+		return
+	}
+	tok, exp, err := s.auth.NewSession(ctx, u.ID)
+	if err != nil {
+		s.log.Error("new session after password change", "err", err)
+		auth.ClearSessionCookie(w, r)
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+	auth.SetSessionCookie(w, r, tok, exp, s.now())
 	s.audit(r, &u.ID, "user.password", "user:"+u.Login, nil)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// loggedLogin bounds a login name copied into the audit log.
+func loggedLogin(login string) string {
+	if len(login) > maxLoggedLogin {
+		return strings.ToValidUTF8(login[:maxLoggedLogin], "")
+	}
+	return login
+}
+
+// lockedMessage sets Retry-After and returns the lockout message.
+func lockedMessage(w http.ResponseWriter, what string, locked *auth.LockedError) string {
+	w.Header().Set("Retry-After", strconv.Itoa(int(locked.Wait.Seconds())+1))
+	return "Too many failed " + what + ". Try again in " + strconv.Itoa(int(locked.Wait.Minutes())+1) + " min."
 }
 
 // audit records an audit entry; a failure is logged, not shown.

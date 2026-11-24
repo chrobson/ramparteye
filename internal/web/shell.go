@@ -21,7 +21,8 @@ type Shell struct {
 	Nav      []NavGroup
 }
 
-// Chip is a top bar status chip. Kind is chip-ok, chip-bad or chip-off.
+// Chip is a top bar status chip. Kind is chip-ok, chip-bad, chip-idle or
+// chip-off.
 type Chip struct {
 	Text string
 	Kind string
@@ -153,7 +154,7 @@ func scopeSummary(prefixes []string) string {
 }
 
 func scanChip(active []int64) Chip {
-	c := Chip{Kind: "chip-off", Text: "No scan running", Href: "/scans"}
+	c := Chip{Kind: "chip-idle", Text: "Idle", Href: "/scans"}
 	switch len(active) {
 	case 0:
 	case 1:
