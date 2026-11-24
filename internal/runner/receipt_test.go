@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"net/netip"
+	"sync"
 	"testing"
 
 	"github.com/ctx42/testing/pkg/assert"
@@ -111,4 +112,46 @@ func TestRecoverSyncsSignatures(t *testing.T) {
 	assert.Equal(t, 1, f.fs.synced)
 	assert.NotEmpty(t, f.fs.sigRows)
 	assert.True(t, len(f.r.eng.Signatures()) > 1)
+}
+
+// LoadSignatures syncs the built-ins and replaces the engine's set with the
+// enabled signatures; later runs use the new set.
+func TestLoadSignaturesReloadsEnabledSet(t *testing.T) {
+	f, _ := pipelineFixture(t, headerSig)
+	ctx := context.Background()
+	assert.NoError(t, f.r.LoadSignatures(ctx))
+	n := len(f.r.Signatures())
+	assert.True(t, n > 1)
+
+	f.fs.disableSignature("nginx")
+	assert.NoError(t, f.r.LoadSignatures(ctx))
+
+	assert.Len(t, n-1, f.r.Signatures())
+	assert.Equal(t, 2, f.fs.synced)
+	for _, s := range f.r.Signatures() {
+		assert.NotEqual(t, "nginx", s.ID)
+	}
+}
+
+// Concurrent reloads (two signature edits at once) are serialised.
+func TestLoadSignaturesConcurrent(t *testing.T) {
+	f, _ := pipelineFixture(t, headerSig)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			assert.NoError(t, f.r.LoadSignatures(context.Background()))
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, 8, f.fs.synced)
+	assert.True(t, len(f.r.Signatures()) > 1)
+}
+
+func TestLoadSignaturesWithoutEngine(t *testing.T) {
+	f := setup(t)
+	assert.NoError(t, f.r.LoadSignatures(context.Background()))
+	assert.Nil(t, f.r.Signatures())
+	assert.Equal(t, 0, f.fs.synced)
 }

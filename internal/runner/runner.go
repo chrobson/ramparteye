@@ -125,7 +125,7 @@ type Config struct {
 	HTTPRate    float64 // prober request rate, recorded in the receipt
 	HTTPBurst   int
 	// PathProbesPerHost is the per-host path probe budget of a run
-	// (0 = unlimited).
+	// (0 = unlimited, safety.PathProbesDisabled = no path probes).
 	PathProbesPerHost int
 	ProbeWorkers      int // parallel HTTP probes, default 8
 
@@ -188,6 +188,7 @@ type Runner struct {
 	ended    map[int64]bool       // runs whose OnRunDone was called
 	stale    map[int64]staleRun   // runs left running because FinishRun failed
 	noFetch  sync.Once            // warns once that path probes are disabled
+	sigMu    sync.Mutex           // serialises LoadSignatures
 	wg       sync.WaitGroup
 
 	events broker

@@ -25,7 +25,7 @@ func Due(now time.Time, cfg store.ScanConfig, last *store.RunInfo) bool {
 // running by a previous process return to pending and their runs become
 // paused (store.ResetRunning: one scanning process per database). It also
 // syncs the built-in signatures into the store and loads the enabled ones
-// into the engine.
+// into the engine (LoadSignatures).
 func (r *Runner) Recover(ctx context.Context) error {
 	n, err := r.st.ResetRunning(ctx)
 	if err != nil {
@@ -34,9 +34,20 @@ func (r *Runner) Recover(ctx context.Context) error {
 	if n > 0 {
 		r.cfg.Log.Info("scan chunks reset to pending", "count", n)
 	}
+	return r.LoadSignatures(ctx)
+}
+
+// LoadSignatures syncs the built-in signatures into the store and replaces
+// the engine's set with the enabled ones; runs that start afterwards use
+// the new set. A partly broken set is still loaded (the broken signatures
+// are logged). Concurrent calls are serialised, so an older load never
+// overwrites a newer one. Without an engine it does nothing.
+func (r *Runner) LoadSignatures(ctx context.Context) error {
 	if r.eng == nil {
 		return nil
 	}
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
 	if err := sig.SyncBuiltin(ctx, r.st, r.cfg.Log); err != nil {
 		return fmt.Errorf("sync built-in signatures: %w", err)
 	}
@@ -48,6 +59,15 @@ func (r *Runner) Recover(ctx context.Context) error {
 		r.eng.SetSignatures(sigs)
 	}
 	return nil
+}
+
+// Signatures returns the engine's active signature set (nil without an
+// engine).
+func (r *Runner) Signatures() []*sig.Signature {
+	if r.eng == nil {
+		return nil
+	}
+	return r.eng.Signatures()
 }
 
 // Loop calls Recover and then Tick every interval until ctx is done, then

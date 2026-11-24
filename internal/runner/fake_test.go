@@ -510,8 +510,30 @@ func (f *fakeStore) SyncBuiltinSignatures(_ context.Context, rows []store.Signat
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.synced++
-	f.sigRows = rows
+	// Like the store, a sync keeps the enabled flag of known signatures.
+	enabled := map[string]bool{}
+	for _, r := range f.sigRows {
+		enabled[r.ID] = r.Enabled
+	}
+	out := make([]store.SignatureRow, len(rows))
+	for i, r := range rows {
+		if e, ok := enabled[r.ID]; ok {
+			r.Enabled = e
+		}
+		out[i] = r
+	}
+	f.sigRows = out
 	return nil, nil
+}
+
+func (f *fakeStore) disableSignature(id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.sigRows {
+		if f.sigRows[i].ID == id {
+			f.sigRows[i].Enabled = false
+		}
+	}
 }
 
 func (f *fakeStore) runStatus(id int64) string {
