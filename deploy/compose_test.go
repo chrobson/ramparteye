@@ -22,7 +22,8 @@ type composeFile struct {
 		Content string `yaml:"content"`
 	} `yaml:"configs"`
 	Networks map[string]struct {
-		Name string `yaml:"name"`
+		Name     string `yaml:"name"`
+		Internal bool   `yaml:"internal"`
 		IPAM struct {
 			Config []struct {
 				Subnet string `yaml:"subnet"`
@@ -40,6 +41,8 @@ type service struct {
 	Volumes         []string          `yaml:"volumes"`
 	Environment     map[string]string `yaml:"environment"`
 	CapAdd          []string          `yaml:"cap_add"`
+	CapDrop         []string          `yaml:"cap_drop"`
+	SecurityOpt     yaml.Node         `yaml:"security_opt"`
 	Networks        map[string]struct {
 		IPv4 string `yaml:"ipv4_address"`
 	} `yaml:"networks"`
@@ -126,6 +129,9 @@ func TestComposeApp(t *testing.T) {
 	assert.True(t, app.ReadOnly)
 	assert.Equal(t, "${RAMPART_IMAGE:-ghcr.io/chrobson/ramparteye:latest}", app.Image)
 	assert.Equal(t, "/var/lib/ramparteye/secrets", app.Environment["RAMPART_SECRETS_DIR"])
+	assert.Equal(t, []string{"ALL"}, app.CapDrop)
+	assert.Len(t, 1, app.SecurityOpt.Content)
+	assert.Equal(t, "no-new-privileges:true", app.SecurityOpt.Content[0].Value)
 }
 
 func TestComposeDemoApp(t *testing.T) {
@@ -139,7 +145,13 @@ func TestComposeDemoApp(t *testing.T) {
 	assert.Equal(t, "true", app.Environment["RAMPART_SCAN_PRIVILEGED"])
 	assert.Equal(t, []string{"NET_RAW", "NET_ADMIN"}, app.CapAdd)
 	assert.Equal(t, "10.20.63.251", app.Networks["lab"].IPv4)
-	assert.Equal(t, "ramparteye-lab", c.Networks["lab"].Name)
+	// nmap-privileged gains its file capabilities only without
+	// no-new-privileges; cap_drop ALL from compose.yml stays.
+	assert.Equal(t, "!reset", app.SecurityOpt.Tag)
+	assert.Len(t, 0, app.CapDrop)
+	// Project-scoped name, no route out of the lab.
+	assert.Equal(t, "", c.Networks["lab"].Name)
+	assert.True(t, c.Networks["lab"].Internal)
 	assert.Equal(t, "10.20.0.0/18", c.Networks["lab"].IPAM.Config[0].Subnet)
 }
 

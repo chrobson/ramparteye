@@ -70,6 +70,10 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    # The app needs no capabilities; compose.demo.yml adds the two that the
+    # SYN-scan nmap copy needs.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # serve drains for up to 20 s on SIGTERM.
     stop_grace_period: 30s
     healthcheck:

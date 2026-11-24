@@ -16,7 +16,8 @@ and the ground truth to check a scan against:
 
 Layout:
 
-- Network `ramparteye-lab`, `10.20.0.0/18` (16,384 addresses), gateway `10.20.0.1`.
+- Compose network `lab` (`<project>_lab`), `10.20.0.0/18` (16,384 addresses), gateway `10.20.0.1`,
+  `internal: true`: the targets have no route out of the lab.
 - 30 targets on fixed addresses spread across the whole /18. The RampartEye app joins the network at
   `10.20.63.251` with `NET_RAW`/`NET_ADMIN` (SYN scan, ARP discovery) and the lab as its only scope.
 - About 1.5 GiB RAM with everything running (Jenkins ~400 MiB, MySQL ~170 MiB). Images are pinned;
@@ -134,5 +135,8 @@ Change detection is checked exactly, so every fingerprint has to be the same in 
   nmap's tcpwrapped threshold, so the port flipped between `NLnet Labs NSD` and `tcpwrapped`.
 - **`change.sh` waits** until every service in `expected/<run>.json` accepts TCP connections, so a
   scan started right after a switch does not miss Jenkins, MySQL or Tomcat while they boot.
-- **One lab per docker host.** The network name and subnet are fixed, so two demo stacks (for
-  example `install.sh --demo` and `make e2e`) cannot run at the same time.
+- **One lab per docker host.** The subnet is fixed, so two demo stacks (for example
+  `install.sh --demo` and `make e2e`) cannot run at the same time, and the demo cannot start when
+  `10.20.0.0/18` overlaps a network the docker host already uses (your LAN, a VPN, another docker
+  network). To move it, change the subnet and every lab address in `compose.demo.yml`, the
+  variants and `gen_expected.py` together.

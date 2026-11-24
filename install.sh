@@ -18,6 +18,8 @@
 # RAMPART_PORT and RAMPART_DB_PORT set the UI port (default 9080) and the
 # database port on the host loopback (default 55432).
 set -eu
+# Everything written here (.env holds the database password) is private.
+umask 077
 
 base_url="${RAMPART_INSTALL_BASE_URL:-https://raw.githubusercontent.com/chrobson/ramparteye/main}"
 image="${RAMPART_INSTALL_LOCAL_IMAGE:-ghcr.io/chrobson/ramparteye:latest}"
@@ -65,23 +67,67 @@ while [ $# -gt 0 ]; do
 	esac
 done
 
+[ "$demo" = 0 ] || [ -z "$scope" ] || die "--scope and --demo exclude each other: the demo scans only its bundled lab"
+
 # --- requirements -----------------------------------------------------------
 command -v docker >/dev/null 2>&1 || die "docker is not installed: https://docs.docker.com/engine/install/"
 docker info >/dev/null 2>&1 || die "cannot talk to the docker daemon (is it running, may this user use it?)"
 compose_version=$(docker compose version --short 2>/dev/null) ||
 	die "docker compose v2 is not installed: https://docs.docker.com/compose/install/"
 compose_version=${compose_version#v}
+# Fails closed: a version that does not parse as MAJOR.MINOR[...] is refused.
+case "$compose_version" in
+[0-9]*.[0-9]*) ;;
+*) die "cannot tell the docker compose version ('$compose_version'): 2.24 or later is needed" ;;
+esac
 major=${compose_version%%.*}
 minor=${compose_version#*.}
-minor=${minor%%.*}
-if [ "$major" -lt 2 ] 2>/dev/null || { [ "$major" -eq 2 ] && [ "$minor" -lt 24 ]; }; then
+minor=${minor%%[!0-9]*}
+case "$major$minor" in
+*[!0-9]* | "") die "cannot tell the docker compose version ('$compose_version'): 2.24 or later is needed" ;;
+esac
+if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 24 ]; }; then
 	die "docker compose $compose_version is too old: 2.24 or later is needed"
 fi
 
+# --- existing install -------------------------------------------------------
+existing=""
+if [ -f "$dir/.env" ]; then
+	existing=regular
+	grep -q '^COMPOSE_FILE=.*compose\.demo\.yml' "$dir/.env" && existing=demo
+fi
+if [ "$existing" = demo ] && [ "$demo" = 0 ]; then
+	die "$dir holds a demo install; use another --dir or run \`docker compose down -v\` there first"
+fi
+if [ "$existing" = regular ] && [ "$demo" = 1 ]; then
+	die "$dir holds a regular install; use another --dir or run \`docker compose down -v\` there first"
+fi
+
 # --- scope ------------------------------------------------------------------
+# valid_item: an IPv4 address or CIDR (octets 0-255, prefix 0-32) or an
+# IPv6 address or CIDR (prefix 0-128); the app parses them fully.
+valid_item() {
+	case "$1" in
+	*:*)
+		printf '%s' "$1" | grep -Eq '^[0-9A-Fa-f:]*:[0-9A-Fa-f:.]*(/[0-9]{1,3})?$' || return 1
+		case "$1" in */*) [ "${1#*/}" -le 128 ] || return 1 ;; esac
+		;;
+	*)
+		printf '%s' "$1" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}(/[0-9]{1,2})?$' || return 1
+		printf '%s' "$1" | awk -F'[./]' '{ for (i = 1; i <= 4; i++) if ($i > 255) exit 1; if (NF == 5 && $5 > 32) exit 1 }'
+		;;
+	esac
+}
 valid_scope() {
-	# Comma separated IPv4/IPv6 addresses or CIDRs; the app checks them fully.
-	printf '%s' "$1" | grep -Eq '^[0-9A-Fa-f.:/]+(,[0-9A-Fa-f.:/]+)*$'
+	case "$1" in "" | ,* | *, | *,,*) return 1 ;; esac
+	old_ifs=$IFS
+	IFS=,
+	# shellcheck disable=SC2086 # split on commas
+	set -- $1
+	IFS=$old_ifs
+	for item in "$@"; do
+		valid_item "$item" || return 1
+	done
 }
 if [ "$demo" = 0 ] && [ -z "$scope" ] && ! grep -q '^RAMPART_ALLOWED_CIDRS=.' "$dir/.env" 2>/dev/null; then
 	if [ -r /dev/tty ] && (: </dev/tty) 2>/dev/null; then
@@ -93,7 +139,10 @@ if [ "$demo" = 0 ] && [ -z "$scope" ] && ! grep -q '^RAMPART_ALLOWED_CIDRS=.' "$
 fi
 scope=$(printf '%s' "$scope" | tr -d ' ')
 if [ -n "$scope" ] && ! valid_scope "$scope"; then
-	die "invalid scope '$scope': use addresses or CIDRs separated by commas"
+	die "invalid scope '$scope': use IPv4/IPv6 addresses or CIDRs separated by commas"
+fi
+if [ -n "$scope" ] && [ -n "$existing" ] && ! grep -q '^RAMPART_ALLOWED_CIDRS=' "$dir/.env"; then
+	die "$dir/.env has no RAMPART_ALLOWED_CIDRS line to update; add it by hand"
 fi
 
 # --- files ------------------------------------------------------------------
@@ -101,7 +150,9 @@ mkdir -p "$dir"
 files="compose.yml"
 [ "$demo" = 1 ] && files="compose.yml compose.demo.yml"
 src="${RAMPART_INSTALL_SOURCE:-}"
-if [ -z "$src" ]; then
+# A checkout running its own install.sh uses its compose files (`curl | sh`
+# has no script file, so it always downloads).
+if [ -z "$src" ] && [ -f "$0" ] && [ "$(basename "$0")" = install.sh ]; then
 	here=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || here=""
 	if [ -n "$here" ] && [ -f "$here/compose.yml" ] && [ -f "$here/compose.demo.yml" ]; then
 		src="$here"
@@ -110,15 +161,24 @@ fi
 [ -z "$src" ] || src=$(cd "$src" && pwd) || die "no such directory: $src"
 dest=$(cd "$dir" && pwd)
 for f in $files; do
+	tmp="$dir/.$f.tmp"
 	if [ -n "$src" ]; then
-		[ "$src" = "$dest" ] || cp "$src/$f" "$dir/$f"
+		[ "$src" = "$dest" ] && continue
+		cp "$src/$f" "$tmp"
 	elif command -v curl >/dev/null 2>&1; then
-		curl -fsSL "$base_url/$f" -o "$dir/$f" || die "download failed: $base_url/$f"
+		curl -fsSL "$base_url/$f" -o "$tmp" || {
+			rm -f "$tmp"
+			die "download failed: $base_url/$f"
+		}
 	elif command -v wget >/dev/null 2>&1; then
-		wget -q -O "$dir/$f" "$base_url/$f" || die "download failed: $base_url/$f"
+		wget -q -O "$tmp" "$base_url/$f" || {
+			rm -f "$tmp"
+			die "download failed: $base_url/$f"
+		}
 	else
 		die "curl or wget is needed to download $f"
 	fi
+	mv "$tmp" "$dir/$f"
 done
 if [ -n "$src" ]; then
 	echo "Compose files copied from $src"
@@ -131,7 +191,6 @@ if [ -f .env ]; then
 		sed "s|^RAMPART_ALLOWED_CIDRS=.*|RAMPART_ALLOWED_CIDRS=$scope|" .env >.env.new && mv .env.new .env
 	fi
 else
-	umask 077
 	db_password=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
 	compose_file="compose.yml"
 	[ "$demo" = 1 ] && compose_file="compose.yml:compose.demo.yml"
