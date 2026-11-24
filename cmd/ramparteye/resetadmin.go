@@ -15,6 +15,10 @@ const resetAdminUsage = "usage: ramparteye reset-admin [--login NAME]"
 // auditPasswordReset is the audit action of reset-admin.
 const auditPasswordReset = "user.password.reset"
 
+// lockoutNote tells the operator that reset-admin cannot clear the login
+// throttle, which only the serve process holds.
+const lockoutNote = "Login lockout (if any) clears within 15 minutes or on restart of serve."
+
 // cmdResetAdmin sets a new random password for a user (default admin) that
 // must be changed at the next login, re-enables the account, ends its
 // sessions and prints the password once. It is the recovery path for a lost
@@ -42,6 +46,8 @@ func cmdResetAdmin(e *env, args []string) int {
 		return e.fail("reset-admin", err)
 	}
 	fmt.Fprintf(e.stdout, "new password for %s (shown once, must be changed at login): %s\n", *login, pw)
+	// The login throttle lives in the memory of the serve process.
+	fmt.Fprintln(e.stdout, lockoutNote)
 	return exitOK
 }
 
@@ -75,7 +81,7 @@ func resetPassword(ctx context.Context, st *store.Store, login string) (string, 
 			return err
 		}
 		return tx.InsertAudit(ctx, nil, auditPasswordReset, "user:"+u.Login,
-			map[string]any{"actor": "cli", "enabled": u.Disabled})
+			map[string]any{"actor": "cli", "reenabled": u.Disabled})
 	})
 	if err != nil {
 		return "", err

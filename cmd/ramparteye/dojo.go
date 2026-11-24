@@ -28,7 +28,7 @@ func cmdDojo(e *env, args []string) int {
 	if code != exitOK {
 		return code
 	}
-	box, _, err := loadBox(&cfg)
+	box, _, err := loadBox(&cfg, false)
 	if err != nil {
 		return e.fail("dojo", err)
 	}

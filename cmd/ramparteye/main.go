@@ -63,7 +63,7 @@ func init() {
 		"seed-demo":   {"add demo targets and the scan profile \"Demo\"", cmdSeedDemo},
 		"audit":       {"safety receipt of a run as JSON; non-zero exit when a check fails", cmdAudit},
 		"dojo":        {"dojo push [--run ID]: push a run to DefectDojo now", cmdDojo},
-		"reset-admin": {"set a new one-time password for a user (default admin)", cmdResetAdmin},
+		"reset-admin": {"new one-time password for a user (default admin); a login lockout clears within 15 minutes or on restart of serve", cmdResetAdmin},
 		"version":     {"print the version", cmdVersion},
 	}
 }
@@ -111,6 +111,12 @@ func usage(w io.Writer) {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		// The first signal starts a graceful stop; restoring the default
+		// handling lets a second one kill the process.
+		<-ctx.Done()
+		stop()
+	}()
 	e := &env{ctx: ctx, stdout: os.Stdout, stderr: os.Stderr, getenv: os.Getenv}
 	code := e.run(os.Args)
 	stop()

@@ -59,7 +59,7 @@ func cmdSeedDemo(e *env, args []string) int {
 
 // seedTargets returns the targets seed-demo adds when none are given:
 // host.docker.internal when the app reaches its host through the docker
-// gateway (RAMPART_ALLOW_HOSTS names it), localhost otherwise.
+// gateway (RAMPART_ALLOW_HOSTS names it), 127.0.0.1 otherwise.
 func seedTargets(cfg config.Config, args []string) []string {
 	if len(args) > 0 {
 		return args
@@ -67,7 +67,7 @@ func seedTargets(cfg config.Config, args []string) []string {
 	if slices.Contains(cfg.AllowHosts, "host.docker.internal") {
 		return []string{"host.docker.internal"}
 	}
-	return []string{"localhost"}
+	return []string{"127.0.0.1"}
 }
 
 // defaultProfileRate is the packets/s of a profile created from the CLI,

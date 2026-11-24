@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/chrobson/ramparteye/internal/config"
+	"github.com/chrobson/ramparteye/internal/db"
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/scope"
-	"github.com/chrobson/ramparteye/internal/sig"
 	"github.com/chrobson/ramparteye/internal/store"
 )
 
@@ -59,7 +59,7 @@ func cmdScan(e *env, args []string) int {
 	if err != nil {
 		return e.fail("scan", err)
 	}
-	box, _, err := loadBox(&cfg)
+	box, _, err := loadBox(&cfg, false)
 	if err != nil {
 		return e.fail("scan", err)
 	}
@@ -68,18 +68,20 @@ func cmdScan(e *env, args []string) int {
 		return e.fail("scan", err)
 	}
 	defer pool.Close()
+	if _, err := db.Migrate(ctx, pool); err != nil {
+		return e.fail("scan", err)
+	}
 	log := e.logger()
 
 	configID, err := scanProfile(ctx, e, st, a, sc, cfg)
 	if err != nil {
 		return e.fail("scan", err)
 	}
-	s := newScanner(cfg, st, sc, box, log)
+	s := newScanner(cfg, st, sc, box, log, nil)
 	// No Recover here: a running `serve` owns the chunks it leases.
-	if err := sig.SyncBuiltin(ctx, st, log); err != nil {
-		return e.fail("scan", fmt.Errorf("sync built-in signatures: %w", err))
+	if err := s.runner.LoadSignatures(ctx); err != nil {
+		return e.fail("scan", err)
 	}
-	s.reloadSignatures(ctx)
 
 	events, unsubscribe := s.runner.Subscribe()
 	defer unsubscribe()
@@ -93,7 +95,7 @@ func cmdScan(e *env, args []string) int {
 		close(idle)
 	}()
 	followRun(events, idle, runID, e.stderr)
-	s.stop(shutdownTimeout)
+	shutdown(log, shutdownBudget, shutdownSteps{waitRuns: s.runner.Wait, closePusher: s.pusher.Close})
 
 	// The summary is read even after Ctrl+C, which paused the run.
 	rctx := context.WithoutCancel(ctx)

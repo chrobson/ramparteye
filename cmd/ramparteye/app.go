@@ -6,8 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/chrobson/ramparteye/internal/dojo"
 	"github.com/chrobson/ramparteye/internal/httpfp"
 	"github.com/chrobson/ramparteye/internal/runner"
+	"github.com/chrobson/ramparteye/internal/safety"
 	"github.com/chrobson/ramparteye/internal/scan"
 	"github.com/chrobson/ramparteye/internal/scope"
 	"github.com/chrobson/ramparteye/internal/secret"
@@ -162,9 +166,16 @@ func requireScope(ctx context.Context, cfg config.Config) (scope.Scope, error) {
 	return sc, nil
 }
 
-// loadBox loads (or creates on first start) the AES key and stores it in
-// cfg.SecretKey, which also keys the instance id shared by every process.
-func loadBox(cfg *config.Config) (*secret.Box, bool, error) {
+// loadBox loads the AES key and stores it in cfg.SecretKey, which also
+// keys the instance id shared by every process. Only `serve` creates a
+// missing key (create); other commands must not invent a key of their own.
+func loadBox(cfg *config.Config, create bool) (*secret.Box, bool, error) {
+	if !create && len(cfg.SecretKey) == 0 {
+		if _, err := os.Stat(filepath.Join(cfg.SecretsDir, keyFileName)); errors.Is(err, fs.ErrNotExist) {
+			return nil, false, fmt.Errorf("secret key not found in %s: start `ramparteye serve` once, "+
+				"or set RAMPART_SECRETS_DIR or RAMPART_SECRET_KEY", cfg.SecretsDir)
+		}
+	}
 	key, created, err := secret.LoadOrCreate(cfg.SecretsDir, keyFileName, secret.KeySize, cfg.SecretKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("secret key: %w", err)
@@ -177,17 +188,16 @@ func loadBox(cfg *config.Config) (*secret.Box, bool, error) {
 	return box, created, nil
 }
 
-// scanner is the scan machinery shared by `serve` and `scan`: one runner
-// with its signature engine, and the DefectDojo pusher on its run hook.
+// scanner is the scan machinery shared by `serve` and `scan`: the runner
+// (with its signature engine) and the DefectDojo pusher on its run hook.
 type scanner struct {
 	runner *runner.Runner
-	engine *sig.Engine
 	pusher *dojo.Pusher
-	st     *store.Store
-	log    *slog.Logger
 }
 
-func newScanner(cfg config.Config, st *store.Store, sc scope.Scope, box *secret.Box, log *slog.Logger) *scanner {
+// newScanner wires the runner and the pusher. nm replaces nmap (tests);
+// nil runs the real binary.
+func newScanner(cfg config.Config, st *store.Store, sc scope.Scope, box *secret.Box, log *slog.Logger, nm scan.Scanner) *scanner {
 	retries := cfg.HTTPRetries
 	if retries == 0 {
 		retries = -1 // httpfp: 0 selects the default, negative disables retries
@@ -201,43 +211,90 @@ func newScanner(cfg config.Config, st *store.Store, sc scope.Scope, box *secret.
 		LatencySample: true,
 		UserAgent:     "ramparteye/" + version + " (+attack surface inventory)",
 	})
+	if nm == nil {
+		nm = scan.NewNmap(cfg.NmapPath, sc, nil)
+	}
 	eng := sig.NewEngine(nil, sig.NewHTTPFetcher(prober))
-	r := runner.New(st, scan.NewNmap(cfg.NmapPath, sc, nil), prober, eng, sc, runner.Config{
-		Privileged:       cfg.ScanPrivileged,
-		MaxRate:          cfg.MaxRate,
-		AllowedPorts:     cfg.ScanPorts,
-		AllPortsMaxAddrs: cfg.AllPortsMaxAddrs,
-		Resolver:         target.Resolver(config.DefaultResolver),
-		Unstable:         diff.Config(cfg.Unstable),
-		HTTPTimeout:      cfg.HTTPTimeout,
-		Log:              log,
-	})
+	r := runner.New(st, nm, prober, eng, sc, runnerConfig(cfg, log))
 	p := dojo.NewPusher(st, dojo.StoredSettings(st, box, cfg), dojo.DefaultClient)
 	p.Log = log
 	r.OnRunDone = p.OnRunDone
-	return &scanner{runner: r, engine: eng, pusher: p, st: st, log: log}
+	return &scanner{runner: r, pusher: p}
 }
 
-// reloadSignatures loads the enabled signatures into the engine; the runner
-// uses the new set for runs that start afterwards. A partly broken set is
-// still loaded (the broken ones are logged).
-func (s *scanner) reloadSignatures(ctx context.Context) {
-	sigs, err := sig.LoadEnabled(ctx, s.st)
-	if err != nil {
-		s.log.Warn("some signatures not loaded", "err", err)
+// runnerConfig maps the configuration to the runner's settings.
+// RAMPART_PATH_PROBES_PER_HOST=0 disables path probes; it never means
+// unlimited.
+func runnerConfig(cfg config.Config, log *slog.Logger) runner.Config {
+	probes := cfg.PathProbesPerHost
+	if probes == 0 {
+		probes = safety.PathProbesDisabled
 	}
-	if sigs != nil || err == nil {
-		s.engine.SetSignatures(sigs)
+	return runner.Config{
+		Privileged:        cfg.ScanPrivileged,
+		MaxRate:           cfg.MaxRate,
+		AllowedPorts:      cfg.ScanPorts,
+		AllPortsMaxAddrs:  cfg.AllPortsMaxAddrs,
+		Resolver:          target.Resolver(config.DefaultResolver),
+		Unstable:          diff.Config(cfg.Unstable),
+		HTTPTimeout:       cfg.HTTPTimeout,
+		PathProbesPerHost: probes,
+		Log:               log,
 	}
 }
 
-// stop waits for the runner's runs to stop (their context must be done
-// already), then closes the pusher: no OnRunDone call can follow.
-func (s *scanner) stop(timeout time.Duration) {
-	s.runner.Wait()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+// shutdownSteps are the parts of a graceful stop, in order. Nil steps are
+// skipped.
+type shutdownSteps struct {
+	stopRuns    func()                          // cancels scans, SSE streams and request contexts
+	stopHTTP    func(ctx context.Context) error // drains the HTTP server
+	loopDone    <-chan struct{}                 // closed when the scheduler loop returned
+	waitRuns    func()                          // returns when every run has stopped
+	closePusher func(ctx context.Context) error // cancels and waits for DefectDojo pushes
+}
+
+// shutdown runs the steps in order within one budget: the runner is waited
+// for before the pusher closes, so no OnRunDone call can follow Close.
+// A step still running when the budget is spent is logged and abandoned;
+// the pusher is then closed with the expired context, which cancels its
+// pushes in flight without waiting.
+func shutdown(log *slog.Logger, budget time.Duration, s shutdownSteps) {
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
-	if err := s.pusher.Close(ctx); err != nil {
-		s.log.Warn("DefectDojo pushes still running at exit", "err", err)
+	if s.stopRuns != nil {
+		s.stopRuns()
+	}
+	if s.stopHTTP != nil {
+		if err := s.stopHTTP(ctx); err != nil {
+			log.Warn("HTTP shutdown", "err", err)
+		}
+	}
+	if s.loopDone != nil && !waitDone(ctx, s.loopDone) {
+		log.Warn("scheduler still running at exit", "budget", budget.String())
+	}
+	if s.waitRuns != nil {
+		runsDone := make(chan struct{})
+		go func() {
+			s.waitRuns()
+			close(runsDone)
+		}()
+		if !waitDone(ctx, runsDone) {
+			log.Warn("scans still stopping at exit", "budget", budget.String())
+		}
+	}
+	if s.closePusher != nil {
+		if err := s.closePusher(ctx); err != nil {
+			log.Warn("DefectDojo pushes still running at exit", "err", err)
+		}
+	}
+}
+
+// waitDone reports whether done closed before ctx ended.
+func waitDone(ctx context.Context, done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
 	}
 }

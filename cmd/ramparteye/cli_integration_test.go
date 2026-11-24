@@ -7,11 +7,14 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +24,9 @@ import (
 	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/db"
+	"github.com/chrobson/ramparteye/internal/dojo"
 	"github.com/chrobson/ramparteye/internal/model"
+	"github.com/chrobson/ramparteye/internal/scan"
 	"github.com/chrobson/ramparteye/internal/store"
 	"github.com/chrobson/ramparteye/internal/testdb"
 )
@@ -113,6 +118,39 @@ func TestResetAdminIntegration(t *testing.T) {
 	assert.Equal(t, "user:admin", entries[0].Entity)
 	assert.Nil(t, entries[0].UserID)
 	assert.Contain(t, `"actor": "cli"`, entries[0].Details)
+	assert.Contain(t, `"reenabled": true`, entries[0].Details)
+	assert.Contain(t, "Login lockout (if any) clears within 15 minutes or on restart of serve.\n", out.String())
+}
+
+func TestCommandsNeedExistingKeyIntegration(t *testing.T) {
+	_, dbURL := migrated(t)
+	secrets := t.TempDir()
+	vars := map[string]string{"RAMPART_DATABASE_URL": dbURL, "RAMPART_SECRETS_DIR": secrets,
+		"RAMPART_ALLOWED_CIDRS": "127.0.0.1/32"}
+	for _, args := range [][]string{{"dojo", "push"}, {"scan", "127.0.0.1"}} {
+		e, _, errb := testEnv(vars)
+
+		code := e.run(append([]string{"ramparteye"}, args...))
+
+		assert.Equal(t, 1, code)
+		assert.Contain(t, "secret key not found in "+secrets, errb.String())
+	}
+	_, err := os.Stat(filepath.Join(secrets, keyFileName))
+	assert.ErrorIs(t, os.ErrNotExist, err)
+}
+
+func TestScanMigratesIntegration(t *testing.T) {
+	_, dbURL := schemaDB(t)
+	secrets := t.TempDir()
+	_, _, err := loadBox(&config.Config{SecretsDir: secrets}, true)
+	assert.NoError(t, err)
+	e, _, errb := testEnv(map[string]string{"RAMPART_DATABASE_URL": dbURL, "RAMPART_SECRETS_DIR": secrets,
+		"RAMPART_ALLOWED_CIDRS": "127.0.0.1/32"})
+
+	code := e.run([]string{"ramparteye", "scan", "--profile", "Nope"})
+
+	assert.Equal(t, 1, code)
+	assert.Contain(t, `no scan profile named "Nope"`, errb.String())
 }
 
 func TestResetAdminUnknownLoginIntegration(t *testing.T) {
@@ -268,26 +306,116 @@ func TestLoadObservedIntegration(t *testing.T) {
 	assert.ErrorContain(t, "run 99", err)
 }
 
-func TestScannerReloadsSignaturesIntegration(t *testing.T) {
+// The web UI's SignaturesChanged hook reloads the runner's engine.
+func TestSignaturesChangedReloadsRunnerIntegration(t *testing.T) {
 	ctx := context.Background()
 	pool, _ := migrated(t)
 	st := store.New(pool)
-	box, _, err := loadBox(&config.Config{SecretsDir: t.TempDir()})
+	cfg := config.Config{SecretsDir: t.TempDir()}
+	box, _, err := loadBox(&cfg, true)
 	assert.NoError(t, err)
-	s := newScanner(config.Config{}, st, mustScope(t, "127.0.0.1/32"), box, slog.New(slog.DiscardHandler))
+	log := slog.New(slog.DiscardHandler)
+	sc := mustScope(t, "127.0.0.1/32")
+	s := newScanner(cfg, st, sc, box, log, nil)
 	assert.NoError(t, s.runner.Recover(ctx))
-	n := len(s.engine.Signatures())
+	n := len(s.runner.Signatures())
 	assert.True(t, n > 0)
+	deps := serveDeps(ctx, pool, st, s, sc, cfg, box, log)
 
 	assert.NoError(t, st.SetSignatureEnabled(ctx, "nginx", false))
-	s.reloadSignatures(ctx)
+	deps.SignaturesChanged()
 
-	assert.Len(t, n-1, s.engine.Signatures())
+	assert.Len(t, n-1, s.runner.Signatures())
+	for _, sg := range s.runner.Signatures() {
+		assert.NotEqual(t, "nginx", sg.ID)
+	}
+	assert.NoError(t, st.SetSignatureEnabled(ctx, "nginx", true))
+	deps.SignaturesChanged()
+	assert.Len(t, n, s.runner.Signatures())
+}
+
+// fakeNmap reports 127.0.0.1 up with ssh on port 22.
+type fakeNmap struct{}
+
+func (fakeNmap) Discover(_ context.Context, ps []netip.Prefix, _ scan.Opts) (scan.Result, error) {
+	now := time.Now()
+	return scan.Result{Hosts: []model.HostObs{{IP: netip.MustParseAddr("127.0.0.1"), Up: true}},
+		Runs: []scan.Run{{Argv: []string{"-sn", "-n"}, Targets: ps, Packets: 2, Elapsed: time.Millisecond,
+			Start: now.Add(-time.Millisecond), End: now}}}, nil
+}
+
+func (fakeNmap) Services(_ context.Context, hosts []netip.Addr, _ scan.Opts) (scan.Result, error) {
+	now := time.Now()
+	res := scan.Result{Runs: []scan.Run{{Argv: []string{"-sV", "-n"}, Packets: 2, Elapsed: time.Millisecond,
+		Start: now.Add(-time.Millisecond), End: now}}}
+	for _, h := range hosts {
+		res.Runs[0].Targets = append(res.Runs[0].Targets, netip.PrefixFrom(h, 32))
+		res.Services = append(res.Services, model.ServiceObs{Key: model.AssetKey{IP: h, Port: 22, Proto: "tcp"},
+			Banner: "ssh", Product: "OpenSSH"})
+	}
+	return res, nil
+}
+
+// A run that finishes is pushed to DefectDojo through runner.OnRunDone and
+// recorded in the push history.
+func TestFinishedRunReachesPusherIntegration(t *testing.T) {
+	ctx := context.Background()
+	pool, _ := migrated(t)
+	st := store.New(pool)
+	var mu sync.Mutex
+	var titles []string
+	dd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/reimport-scan/" || r.Header.Get("Authorization") != "Token tok" {
+			http.Error(w, "unexpected", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		titles = append(titles, r.FormValue("test_title"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"test": 3, "statistics": {}}`))
+	}))
+	defer dd.Close()
+	cfg, err := config.Load(func(k string) string {
+		return map[string]string{"RAMPART_SECRETS_DIR": t.TempDir(), "RAMPART_DOJO_URL": dd.URL,
+			"RAMPART_DOJO_TOKEN": "tok", "RAMPART_DOJO_PRODUCT": "Perimeter"}[k]
+	})
+	assert.NoError(t, err)
+	box, _, err := loadBox(&cfg, true)
+	assert.NoError(t, err)
+	log := slog.New(slog.DiscardHandler)
+	sc := mustScope(t, "127.0.0.1/32")
+	res, err := ensureProfile(ctx, st, sc, nil, "Push", []string{"127.0.0.1"}, nil, 100)
+	assert.NoError(t, err)
+	s := newScanner(cfg, st, sc, box, log, fakeNmap{})
+	assert.NoError(t, s.runner.Recover(ctx))
+
+	runID, err := s.runner.Start(ctx, res.ConfigID)
+	assert.NoError(t, err)
+	s.runner.Wait()
+	assert.Wait(t, 10*time.Second, func() bool {
+		ps, err := st.DojoPushes(ctx, 10)
+		return err == nil && len(ps) == 1
+	})
+	shutdown(log, 5*time.Second, shutdownSteps{waitRuns: s.runner.Wait, closePusher: s.pusher.Close})
+
+	run, err := st.Run(ctx, runID)
+	assert.NoError(t, err)
+	assert.Equal(t, store.RunDone, run.Status)
+	pushes, err := st.DojoPushes(ctx, 10)
+	assert.NoError(t, err)
+	assert.Equal(t, runID, *pushes[0].RunID)
+	assert.Equal(t, "auto", pushes[0].Trigger)
+	assert.True(t, pushes[0].OK, pushes[0].Error)
+	assert.Equal(t, []string{dojo.TestTitle("Push")}, titles)
 }
 
 func TestDBCommandsIntegration(t *testing.T) {
 	_, dbURL := migrated(t)
-	vars := map[string]string{"RAMPART_DATABASE_URL": dbURL, "RAMPART_SECRETS_DIR": t.TempDir(),
+	secrets := t.TempDir()
+	_, _, err := loadBox(&config.Config{SecretsDir: secrets}, true)
+	assert.NoError(t, err)
+	vars := map[string]string{"RAMPART_DATABASE_URL": dbURL, "RAMPART_SECRETS_DIR": secrets,
 		"RAMPART_ALLOWED_CIDRS": "127.0.0.1/32"}
 	for name, tc := range map[string]struct {
 		args []string

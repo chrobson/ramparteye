@@ -148,3 +148,16 @@ func TestParseVerifyArgsFlagsAfterFile(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, verifyArgs{file: "lab/expected/run1.json", runID: 7, min: 0.9}, a)
 }
+
+func TestLoadExpected(t *testing.T) {
+	e, err := loadExpected(writeFile(t, "run2.json", labExpected))
+	assert.NoError(t, err)
+	assert.Equal(t, "10.20.0.0/18", e.Network)
+	assert.Len(t, 2, e.Hosts)
+
+	_, err = loadExpected(writeFile(t, "bad.json", `{"network": "10.20.0.0/33"}`))
+	assert.ErrorContain(t, `bad.json: invalid network "10.20.0.0/33"`, err)
+
+	_, err = loadExpected(writeFile(t, "broken.json", `{`))
+	assert.ErrorContain(t, "broken.json", err)
+}

@@ -136,7 +136,7 @@ func TestEnsureProfileRefusesInvalidAndEmpty(t *testing.T) {
 }
 
 func TestSeedTargets(t *testing.T) {
-	assert.Equal(t, []string{"localhost"}, seedTargets(config.Config{}, nil))
+	assert.Equal(t, []string{"127.0.0.1"}, seedTargets(config.Config{}, nil))
 	assert.Equal(t, []string{"host.docker.internal"},
 		seedTargets(config.Config{AllowHosts: []string{"host.docker.internal"}}, nil))
 	assert.Equal(t, []string{"127.0.0.1", "::1"},

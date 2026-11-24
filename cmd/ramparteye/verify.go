@@ -132,6 +132,11 @@ func loadExpected(path string) (expected, error) {
 	if err := json.Unmarshal(b, &e); err != nil {
 		return e, fmt.Errorf("%s: %w", path, err)
 	}
+	if e.Network != "" {
+		if _, err := netip.ParsePrefix(e.Network); err != nil {
+			return e, fmt.Errorf("%s: invalid network %q", path, e.Network)
+		}
+	}
 	return e, nil
 }
 
@@ -288,7 +293,7 @@ func evaluate(e expected, path string, obs observed, minScore float64) verifyRep
 	rep := verifyReport{RunID: obs.RunID, PrevRunID: obs.PrevRunID, Expected: path,
 		DurationMS: obs.DurationMS, MinScore: minScore}
 
-	var network netip.Prefix
+	var network netip.Prefix // validated by loadExpected
 	if e.Network != "" {
 		network, _ = netip.ParsePrefix(e.Network)
 	}

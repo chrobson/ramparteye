@@ -9,9 +9,14 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/chrobson/ramparteye/internal/bootstrap"
 	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/db"
+	"github.com/chrobson/ramparteye/internal/scope"
+	"github.com/chrobson/ramparteye/internal/secret"
+	"github.com/chrobson/ramparteye/internal/store"
 	"github.com/chrobson/ramparteye/internal/target"
 	"github.com/chrobson/ramparteye/internal/web"
 )
@@ -20,8 +25,8 @@ const (
 	// defaultProfileName is the manual profile covering every target that
 	// a fresh database gets, so "Scan now" works right after adding targets.
 	defaultProfileName = "All targets"
-	// shutdownTimeout bounds each graceful shutdown step.
-	shutdownTimeout = 15 * time.Second
+	// shutdownBudget bounds the whole graceful shutdown.
+	shutdownBudget = 20 * time.Second
 )
 
 func cmdServe(e *env, args []string) int {
@@ -43,7 +48,7 @@ func cmdServe(e *env, args []string) int {
 // the runner stops and the pusher closes, in that order.
 func serve(e *env, cfg config.Config, log *slog.Logger) error {
 	ctx := e.ctx
-	box, created, err := loadBox(&cfg)
+	box, created, err := loadBox(&cfg, true)
 	if err != nil {
 		return err
 	}
@@ -77,7 +82,7 @@ func serve(e *env, cfg config.Config, log *slog.Logger) error {
 		return fmt.Errorf("default scan profile: %w", err)
 	}
 
-	s := newScanner(cfg, st, sc, box, log)
+	s := newScanner(cfg, st, sc, box, log, nil)
 	// Recover returns chunks left running by a previous process to pending,
 	// syncs the built-in signatures and loads the enabled ones.
 	if err := s.runner.Recover(ctx); err != nil {
@@ -88,23 +93,7 @@ func serve(e *env, cfg config.Config, log *slog.Logger) error {
 	// scans, SSE streams and request contexts all stop with it.
 	runCtx, stopRuns := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopRuns()
-	h, err := web.NewServer(web.Deps{
-		Store:       st,
-		Runner:      s.runner,
-		Pusher:      s.pusher,
-		Exchange:    web.NewExchange(pool),
-		Scope:       sc,
-		Cfg:         cfg,
-		Log:         log,
-		Resolver:    target.Resolver(config.DefaultResolver),
-		ShutdownCtx: runCtx,
-		Box:         box,
-		SignaturesChanged: func() {
-			rctx, cancel := context.WithTimeout(runCtx, 30*time.Second)
-			defer cancel()
-			s.reloadSignatures(rctx)
-		},
-	})
+	h, err := web.NewServer(serveDeps(runCtx, pool, st, s, sc, cfg, box, log))
 	if err != nil {
 		return err
 	}
@@ -131,18 +120,41 @@ func serve(e *env, cfg config.Config, log *slog.Logger) error {
 		log.Info("shutting down")
 	case err = <-serveErr:
 	}
-	stopRuns()
-	sctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if serr := srv.Shutdown(sctx); serr != nil {
-		log.Warn("HTTP shutdown", "err", serr)
-	}
-	<-loopDone
-	s.stop(shutdownTimeout)
+	shutdown(log, shutdownBudget, shutdownSteps{
+		stopRuns:    stopRuns,
+		stopHTTP:    srv.Shutdown,
+		loopDone:    loopDone,
+		waitRuns:    s.runner.Wait,
+		closePusher: s.pusher.Close,
+	})
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
 	return err
+}
+
+// serveDeps returns the web UI's dependencies. runCtx ends at shutdown.
+func serveDeps(runCtx context.Context, pool *pgxpool.Pool, st *store.Store, s *scanner, sc scope.Scope,
+	cfg config.Config, box *secret.Box, log *slog.Logger) web.Deps {
+	return web.Deps{
+		Store:       st,
+		Runner:      s.runner,
+		Pusher:      s.pusher,
+		Exchange:    web.NewExchange(pool),
+		Scope:       sc,
+		Cfg:         cfg,
+		Log:         log,
+		Resolver:    target.Resolver(config.DefaultResolver),
+		ShutdownCtx: runCtx,
+		Box:         box,
+		SignaturesChanged: func() {
+			ctx, cancel := context.WithTimeout(runCtx, 30*time.Second)
+			defer cancel()
+			if err := s.runner.LoadSignatures(ctx); err != nil {
+				log.Error("reload signatures", "err", err)
+			}
+		},
+	}
 }
 
 // newHTTPServer returns the UI server. There is no write timeout: the
