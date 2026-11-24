@@ -56,7 +56,7 @@ func TestAllBuiltinsValid(t *testing.T) {
 
 // Every field of every built-in, comments included, is English.
 func TestBuiltinsEnglish(t *testing.T) {
-	polish := regexp.MustCompile(`(?i)[ąćęłńóśźż]`)
+	polish := regexp.MustCompile("(?i)[\u0105\u0107\u0119\u0142\u0144\u00f3\u015b\u017a\u017c]")
 	for _, s := range builtins(t) {
 		assert.False(t, polish.MatchString(s.Raw), "%s: non-English text: %q", s.ID, polish.FindString(s.Raw))
 	}
@@ -308,10 +308,10 @@ func TestBuiltinPolishTitles(t *testing.T) {
 	}{
 		{"admin-panel", "Panel administracyjny"},
 		{"admin-panel", "Panel administratora - logowanie"},
-		{"admin-panel", "Panel zarządzania"},
-		{"admin-panel", "PANEL ZARZĄDZANIA"},
-		{"staging-env", "Środowisko testowe"},
-		{"staging-env", "Sklep - ŚRODOWISKO DEWELOPERSKIE"},
+		{"admin-panel", "Panel zarz\u0105dzania"},
+		{"admin-panel", "PANEL ZARZ\u0104DZANIA"},
+		{"staging-env", "\u015arodowisko testowe"},
+		{"staging-env", "Sklep - \u015aRODOWISKO DEWELOPERSKIE"},
 	}
 	for _, tt := range tests {
 		e := NewEngine([]*Signature{byID[tt.id]}, nil)

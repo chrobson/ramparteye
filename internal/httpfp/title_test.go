@@ -43,7 +43,7 @@ func Test_ExtractTitle_length(t *testing.T) {
 	})
 
 	t.Run("multibyte truncated on a rune boundary", func(t *testing.T) {
-		got := ExtractTitle([]byte("<title>" + strings.Repeat("ż", 2000) + "</title>"))
+		got := ExtractTitle([]byte("<title>" + strings.Repeat("\u017c", 2000) + "</title>"))
 
 		assert.Equal(t, 512, utf8.RuneCountInString(got))
 		assert.True(t, utf8.ValidString(got))
