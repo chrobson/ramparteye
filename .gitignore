@@ -1,0 +1,6 @@
+notes/
+.superpowers/
+bin/
+.env
+secrets/
+tmp/
