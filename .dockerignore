@@ -1,0 +1,10 @@
+.git
+.github
+.superpowers
+.env
+bin
+tmp
+notes
+secrets
+lab
+*.md

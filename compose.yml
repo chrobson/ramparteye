@@ -1,0 +1,112 @@
+# RampartEye: application + PostgreSQL with pg_tde (whole-cluster encryption
+# at rest). install.sh downloads this file next to a generated .env:
+#   docker compose up -d
+#   docker compose logs app | grep "shown once"   # one-time admin password
+#
+# Linux: the app shares the host network namespace so nmap reaches the LAN
+# directly; the UI listens on ${RAMPART_BIND:-127.0.0.1}:${RAMPART_PORT:-9080}.
+# Docker Desktop on macOS/Windows runs containers in a VM: host networking
+# there does not reach your LAN, so real scans need a Linux host (the demo
+# lab in compose.demo.yml works everywhere).
+#
+# Volumes: pgdata (database), pgkeys (pg_tde keyring) and secrets (the app's
+# AES-GCM key) are separate. Back up pgkeys and secrets together with pgdata:
+# the data is unreadable without them.
+# Needs Docker Compose 2.24 or later.
+name: ramparteye
+
+services:
+  keys-init:
+    image: busybox:1.36.1
+    command: ["sh", "-c", "chown 26:26 /keys && chmod 700 /keys"]
+    volumes:
+      - pgkeys:/keys
+
+  db:
+    image: percona/percona-distribution-postgresql:18.7.1-1
+    command: ["postgres", "-c", "shared_preload_libraries=pg_tde"]
+    depends_on:
+      keys-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: ramparteye
+      POSTGRES_PASSWORD: ${RAMPART_DB_PASSWORD:?set RAMPART_DB_PASSWORD in .env}
+      POSTGRES_DB: ramparteye
+      TZ: ${RAMPART_TZ:-UTC}
+    configs:
+      - source: tde-init
+        target: /docker-entrypoint-initdb.d/01-tde.sql
+    volumes:
+      - pgdata:/data/db
+      - pgkeys:/keys
+    # The app runs in the host network namespace and reaches the database
+    # on the host loopback only.
+    ports:
+      - "127.0.0.1:${RAMPART_DB_PORT:-55432}:5432"
+    healthcheck:
+      # TCP, not the socket: the init phase runs a socket-only server.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ramparteye -d ramparteye"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    image: ${RAMPART_IMAGE:-ghcr.io/chrobson/ramparteye:latest}
+    network_mode: host
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      RAMPART_DATABASE_URL: postgres://ramparteye:${RAMPART_DB_PASSWORD}@127.0.0.1:${RAMPART_DB_PORT:-55432}/ramparteye?sslmode=disable
+      RAMPART_HTTP_ADDR: ${RAMPART_BIND:-127.0.0.1}:${RAMPART_PORT:-9080}
+      RAMPART_SECRETS_DIR: /var/lib/ramparteye/secrets
+      TZ: ${RAMPART_TZ:-UTC}
+    volumes:
+      - secrets:/var/lib/ramparteye/secrets
+    read_only: true
+    tmpfs:
+      - /tmp
+    # serve drains for up to 20 s on SIGTERM.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://${RAMPART_BIND:-127.0.0.1}:${RAMPART_PORT:-9080}/login || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+configs:
+  # Same as deploy/db/init/01-tde.sql (checked by deploy/compose_test.go),
+  # inlined so the compose file works on its own.
+  tde-init:
+    content: |
+      -- Runs once on first init (empty PGDATA). The server must be started with
+      -- shared_preload_libraries=pg_tde and a /keys directory owned by the
+      -- postgres user (uid 26). Encrypts the whole cluster at rest: tables,
+      -- indexes, TOAST, sequences and WAL (AES-256).
+      ALTER SYSTEM SET pg_tde.cipher = 'aes_256';
+      SET pg_tde.cipher = 'aes_256';
+      CREATE EXTENSION IF NOT EXISTS pg_tde;
+      SELECT pg_tde_add_global_key_provider_file('keyfile', '/keys/pg_tde.keyring');
+      SELECT pg_tde_create_key_using_global_key_provider('rampart-key', 'keyfile');
+      SELECT pg_tde_set_server_key_using_global_key_provider('rampart-key', 'keyfile');
+      SELECT pg_tde_set_default_key_using_global_key_provider('rampart-key', 'keyfile');
+      ALTER SYSTEM SET pg_tde.wal_encrypt = on;
+      ALTER SYSTEM SET pg_tde.enforce_encryption = on;
+      ALTER SYSTEM SET default_table_access_method = 'tde_heap';
+      -- Keep plaintext out of logs and temp spill files.
+      ALTER SYSTEM SET log_min_error_statement = 'panic';
+      ALTER SYSTEM SET log_statement = 'none';
+      ALTER SYSTEM SET work_mem = '64MB';
+      ALTER SYSTEM SET log_temp_files = 0;
+      \c template1
+      CREATE EXTENSION IF NOT EXISTS pg_tde;
+
+volumes:
+  pgdata: {}
+  pgkeys: {}
+  secrets: {}

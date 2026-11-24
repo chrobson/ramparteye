@@ -1,4 +1,4 @@
-.PHONY: build test test-integration test-db test-db-down vet css css-check
+.PHONY: build test test-integration test-db test-db-down vet css css-check image e2e shellcheck
 
 VERSION ?= dev
 
@@ -32,3 +32,16 @@ css:
 
 css-check: css
 	git diff --exit-code web/static/app.css
+
+# Container image for local runs and validation (install.sh with
+# RAMPART_INSTALL_LOCAL_IMAGE=ramparteye:dev).
+image:
+	docker build --build-arg VERSION=$(VERSION) -t ramparteye:dev .
+
+# Demo stack + bundled lab: three scans with lab changes in between, checked
+# against lab/expected (scripts/e2e.sh). Needs Docker and about 2 GiB RAM.
+e2e:
+	./scripts/e2e.sh
+
+shellcheck:
+	shellcheck install.sh scripts/*.sh lab/*.sh tools/*.sh

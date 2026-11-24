@@ -1,0 +1,598 @@
+{
+  "run": "run3",
+  "network": "10.20.0.0/18",
+  "infra": [
+    {
+      "ip": "10.20.0.0",
+      "note": "network address, answered by the docker bridge (same MAC as gateway)"
+    },
+    {
+      "ip": "10.20.0.1",
+      "note": "docker bridge gateway"
+    },
+    {
+      "ip": "10.20.63.251",
+      "note": "RampartEye app (compose.demo.yml)"
+    }
+  ],
+  "hosts": [
+    {
+      "ip": "10.20.0.10",
+      "name": "nginx-web",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "nginx",
+          "version": "1.26.2",
+          "actual": "nginx 1.26.2",
+          "in_top1000": true,
+          "detections": [
+            "staging-vhost"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.0.11",
+      "name": "nginx-tls",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "nginx",
+          "version": "1.27.3",
+          "actual": "nginx 1.27.3 (301 -> https)",
+          "in_top1000": true,
+          "detections": []
+        },
+        {
+          "port": 443,
+          "proto": "tcp",
+          "product": "nginx",
+          "version": "1.27.3",
+          "actual": "nginx 1.27.3 TLS",
+          "in_top1000": true,
+          "detections": [
+            "tls-self-signed"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.1.20",
+      "name": "wordpress",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "Apache httpd",
+          "version": "2.4.62",
+          "actual": "WordPress 6.6.2 on Apache 2.4.62",
+          "in_top1000": true,
+          "detections": [
+            "wordpress"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.1.21",
+      "name": "wp-db",
+      "services": [
+        {
+          "port": 3306,
+          "proto": "tcp",
+          "product": "MariaDB",
+          "version": "11.4.4",
+          "actual": "MariaDB 11.4.4",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.1.30",
+      "name": "phpmyadmin",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "Apache httpd",
+          "version": "2.4.62",
+          "actual": "phpMyAdmin 5.2.1 on Apache 2.4.62",
+          "in_top1000": true,
+          "detections": [
+            "phpmyadmin"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.2.40",
+      "name": "jenkins",
+      "services": [
+        {
+          "port": 8080,
+          "proto": "tcp",
+          "product": "Jetty",
+          "version": "12.0.16",
+          "actual": "Jenkins 2.479.3 (Jetty 12.0.16)",
+          "in_top1000": true,
+          "detections": [
+            "jenkins"
+          ]
+        },
+        {
+          "port": 50000,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "Jenkins inbound agent (JNLP) port",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.3.50",
+      "name": "grafana",
+      "services": [
+        {
+          "port": 3000,
+          "proto": "tcp",
+          "product": "Grafana http",
+          "version": "",
+          "actual": "Grafana 11.3.0",
+          "in_top1000": true,
+          "detections": [
+            "grafana"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.4.60",
+      "name": "tomcat",
+      "services": [
+        {
+          "port": 8080,
+          "proto": "tcp",
+          "product": "Apache Tomcat",
+          "version": "9.0.97",
+          "actual": "Apache Tomcat 9.0.97 + manager app",
+          "in_top1000": true,
+          "detections": [
+            "tomcat",
+            "tomcat-manager"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.5.70",
+      "name": "gitea",
+      "services": [
+        {
+          "port": 22,
+          "proto": "tcp",
+          "product": "OpenSSH",
+          "version": "9.7",
+          "actual": "OpenSSH 9.7 (gitea image)",
+          "in_top1000": true,
+          "detections": []
+        },
+        {
+          "port": 3000,
+          "proto": "tcp",
+          "product": "Golang net/http server",
+          "version": "",
+          "actual": "Gitea 1.22.3",
+          "in_top1000": true,
+          "detections": [
+            "gitea"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.6.80",
+      "name": "sshd",
+      "services": [
+        {
+          "port": 22,
+          "proto": "tcp",
+          "product": "OpenSSH",
+          "version": "9.7",
+          "actual": "OpenSSH 9.7p1 (alpine 3.20)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.7.90",
+      "name": "mysql",
+      "services": [
+        {
+          "port": 3306,
+          "proto": "tcp",
+          "product": "MySQL",
+          "version": "8.4.3",
+          "actual": "MySQL 8.4.3",
+          "in_top1000": true,
+          "detections": []
+        },
+        {
+          "port": 33060,
+          "proto": "tcp",
+          "product": "MySQL X protocol listener",
+          "version": "",
+          "actual": "MySQL 8.4.3 X protocol",
+          "in_top1000": false,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.8.100",
+      "name": "mosquitto",
+      "services": [
+        {
+          "port": 1883,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "Eclipse Mosquitto 2.0.20 (anonymous allowed)",
+          "in_top1000": false,
+          "detections": [
+            "mqtt-anonymous"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.9.110",
+      "name": "admin-app",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "nginx",
+          "version": "1.27.3",
+          "actual": "nginx 1.27.3 app with /login and /admin",
+          "in_top1000": true,
+          "detections": [
+            "login-panel",
+            "admin-panel"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.10.120",
+      "name": "postgres",
+      "services": [
+        {
+          "port": 5432,
+          "proto": "tcp",
+          "product": "PostgreSQL DB",
+          "version": "16.0 - 16.2",
+          "actual": "PostgreSQL 16.6",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.11.130",
+      "name": "redis",
+      "services": [
+        {
+          "port": 6379,
+          "proto": "tcp",
+          "product": "Redis key-value store",
+          "version": "7.4.1",
+          "actual": "Redis 7.4.1",
+          "in_top1000": false,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.12.140",
+      "name": "nats",
+      "services": [
+        {
+          "port": 4222,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "NATS 2.10.22 client port",
+          "in_top1000": false,
+          "detections": []
+        },
+        {
+          "port": 8222,
+          "proto": "tcp",
+          "product": "Golang net/http server",
+          "version": "",
+          "actual": "NATS 2.10.22 monitoring",
+          "in_top1000": true,
+          "detections": [
+            "nats-monitoring"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.16.10",
+      "name": "bb-http",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "busybox 1.36.1 httpd",
+          "in_top1000": true,
+          "detections": []
+        },
+        {
+          "port": 8000,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "busybox 1.36.1 httpd (second port)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.16.11",
+      "name": "bb-http-alt",
+      "services": [
+        {
+          "port": 8080,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "busybox 1.36.1 httpd",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.20.20",
+      "name": "ftp-banner",
+      "services": [
+        {
+          "port": 21,
+          "proto": "tcp",
+          "product": "vsftpd",
+          "version": "3.0.3",
+          "actual": "socat fake banner (vsFTPd 3.0.3)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.20.21",
+      "name": "smtp-banner",
+      "services": [
+        {
+          "port": 25,
+          "proto": "tcp",
+          "product": "Exim smtpd",
+          "version": "4.96",
+          "actual": "socat fake banner (Exim 4.96)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.24.30",
+      "name": "telnet-iot",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "busybox-extras httpd (router web UI)",
+          "in_top1000": true,
+          "detections": [
+            "router-login"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.28.40",
+      "name": "legacy-ssh",
+      "services": [
+        {
+          "port": 22,
+          "proto": "tcp",
+          "product": "OpenSSH",
+          "version": "8.9p1 Ubuntu 3ubuntu0.10",
+          "actual": "socat fake banner (OpenSSH_8.9p1 Ubuntu-3ubuntu0.10)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.32.50",
+      "name": "ipcam",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "busybox 1.36.1 httpd (camera page)",
+          "in_top1000": true,
+          "detections": [
+            "ip-camera"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.40.70",
+      "name": "apache",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "Apache httpd",
+          "version": "2.4.62",
+          "actual": "Apache httpd 2.4.62",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.44.80",
+      "name": "adminer",
+      "services": [
+        {
+          "port": 8080,
+          "proto": "tcp",
+          "product": "PHP cli server",
+          "version": "5.5 or later",
+          "actual": "Adminer 4.8.1 (PHP 7.4.33)",
+          "in_top1000": true,
+          "detections": [
+            "adminer"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.48.90",
+      "name": "coredns",
+      "services": [
+        {
+          "port": 53,
+          "proto": "tcp",
+          "product": "NLnet Labs NSD",
+          "version": "",
+          "actual": "CoreDNS 1.11.3 (nmap misidentifies)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.52.100",
+      "name": "haproxy",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "HAProxy http proxy",
+          "version": "2.0.0 or later",
+          "actual": "HAProxy 3.0.6",
+          "in_top1000": true,
+          "detections": [
+            "haproxy-stats"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.56.110",
+      "name": "web-8443",
+      "services": [
+        {
+          "port": 8443,
+          "proto": "tcp",
+          "product": "nginx",
+          "version": "1.27.3",
+          "actual": "nginx 1.27.3 TLS, expired cert",
+          "in_top1000": true,
+          "detections": [
+            "tls-self-signed",
+            "tls-expired"
+          ]
+        }
+      ]
+    },
+    {
+      "ip": "10.20.58.10",
+      "name": "intranet",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "Apache httpd",
+          "version": "2.4.62",
+          "actual": "Apache httpd 2.4.62 (ACME Intranet)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    },
+    {
+      "ip": "10.20.60.120",
+      "name": "flappy",
+      "services": [
+        {
+          "port": 80,
+          "proto": "tcp",
+          "product": "",
+          "version": "",
+          "actual": "busybox 1.36.1 httpd (unstable host)",
+          "in_top1000": true,
+          "detections": []
+        }
+      ]
+    }
+  ],
+  "changes_from_prev": [
+    {
+      "kind": "changed",
+      "ip": "10.20.0.10",
+      "port": 80,
+      "proto": "tcp",
+      "in_top1000": true,
+      "old": "nginx 1.27.3",
+      "new": "nginx 1.26.2"
+    },
+    {
+      "kind": "changed",
+      "ip": "10.20.20.21",
+      "port": 25,
+      "proto": "tcp",
+      "in_top1000": true,
+      "old": "Postfix smtpd",
+      "new": "Exim smtpd 4.96"
+    },
+    {
+      "kind": "host_up",
+      "ip": "10.20.60.120",
+      "port": 0,
+      "proto": ""
+    },
+    {
+      "kind": "new",
+      "ip": "10.20.60.120",
+      "port": 80,
+      "proto": "tcp",
+      "in_top1000": true
+    },
+    {
+      "kind": "unstable",
+      "ip": "10.20.60.120",
+      "port": 0,
+      "proto": ""
+    }
+  ]
+}

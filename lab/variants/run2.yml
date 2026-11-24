@@ -1,0 +1,28 @@
+# run2 vs run1 (ground truth: lab/expected/run2.json)
+#   host_down  10.20.60.120 flappy      (the unstable host disappears)
+#   host_down  10.20.36.60  memcached   (service and host removed)
+#   gone       10.20.24.30:23 telnet    (telnet disabled on the IoT router, web UI stays)
+#   host_up    10.20.58.10  intranet    (new host, httpd on 80)
+#   new        10.20.16.10:8000         (bb-http gains a second web port)
+#   changed    10.20.40.70:80           Apache httpd 2.4.58 -> 2.4.62
+#   changed    10.20.28.40:22           OpenSSH 7.4 -> 8.9p1 (banner)
+services:
+  flappy:
+    scale: 0
+  memcached:
+    scale: 0
+  telnet-iot:
+    command: ["busybox-extras", "httpd", "-f", "-p", "80", "-h", "/www"]
+  bb-http:
+    command: ["sh", "-c", "httpd -p 8000 -h /www && exec httpd -f -v -p 80 -h /www"]
+  apache:
+    image: httpd:2.4.62-alpine
+  legacy-ssh:
+    command: ["/lab/banner.sh", "22", "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"]
+  intranet:
+    image: httpd:2.4.62-alpine
+    configs:
+      - { source: www-intranet, target: /usr/local/apache2/htdocs/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.58.10 }
+    restart: unless-stopped

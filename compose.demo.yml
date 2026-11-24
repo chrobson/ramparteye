@@ -1,0 +1,636 @@
+# RampartEye demo: the app joins a bundled scan lab (network ramparteye-lab,
+# 10.20.0.0/18, about 30 targets on fixed addresses) instead of the host
+# network, with the four demo accounts (RAMPART_DEMO=1) and the lab as its
+# only scope. Use it on top of compose.yml:
+#   docker compose -f compose.yml -f compose.demo.yml up -d
+# install.sh --demo writes COMPOSE_FILE to .env so plain `docker compose`
+# commands use both files. Self-contained: every lab file is inlined below.
+# The lab variants (lab/variants/run2.yml, run3.yml) change the lab between
+# scans; lab/expected/runN.json is the ground truth (lab/README.md).
+#
+# The lab needs about 1.5 GiB RAM and pulls about 20 images. Scan ONLY this
+# network. Needs Docker Compose 2.24 or later.
+
+x-targets: &targets
+  image: ramparteye-lab-targets:local
+  build:
+    context: .
+    # Minimal multi-purpose target image: OpenSSH server, socat (fake
+    # banners), busybox-extras (httpd). One image, many small hosts.
+    dockerfile_inline: |
+      FROM alpine:3.20.3
+      RUN apk add --no-cache openssh-server socat busybox-extras \
+       && ssh-keygen -A \
+       && adduser -D -s /bin/sh lab \
+       && echo 'lab:lab' | chpasswd \
+       && sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+      CMD ["/usr/sbin/sshd", "-D", "-e"]
+  restart: unless-stopped
+
+x-busybox: &busybox
+  image: busybox:1.36.1
+  restart: unless-stopped
+
+networks:
+  lab:
+    name: ramparteye-lab
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.20.0.0/18
+          gateway: 10.20.0.1
+
+services:
+  # ------------------------------------------------------------- RampartEye
+  app:
+    # Lab network instead of the host network (compose.yml).
+    network_mode: !reset null
+    # Adds the lab targets and the scan profile "Demo", then serves.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        ramparteye seed-demo 10.20.0.0/18 staging.lab.local
+        || echo "seed-demo failed: add the lab targets on the Targets page" >&2;
+        exec ramparteye serve
+    environment:
+      RAMPART_DATABASE_URL: postgres://ramparteye:${RAMPART_DB_PASSWORD}@db:5432/ramparteye?sslmode=disable
+      RAMPART_HTTP_ADDR: ":9080"
+      RAMPART_DEMO: "1"
+      RAMPART_ALLOWED_CIDRS: 10.20.0.0/18
+      # Network address, docker gateway and this app.
+      RAMPART_SCAN_EXCLUDE: 10.20.0.0,10.20.0.1,10.20.63.251
+      # SYN scan and ARP discovery: the nmap copy with file capabilities,
+      # which needs NET_RAW and NET_ADMIN (cap_add below).
+      RAMPART_SCAN_PRIVILEGED: "true"
+      RAMPART_NMAP_PATH: /usr/local/bin/nmap-privileged
+      NMAP_PRIVILEGED: "1"
+    cap_add: [NET_RAW, NET_ADMIN]
+    # Lab names for the vhost probe (the lab CoreDNS at 10.20.48.90 serves
+    # the same names; it stays a scan target, not the app's resolver).
+    extra_hosts:
+      - "staging.lab.local:10.20.0.10"
+      - "www.lab.local:10.20.0.10"
+      - "secure.lab.local:10.20.0.11"
+      - "old.lab.local:10.20.56.110"
+    ports:
+      - "${RAMPART_BIND:-127.0.0.1}:${RAMPART_PORT:-9080}:9080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9080/login || exit 1"]
+    networks:
+      default: {}
+      lab:
+        ipv4_address: 10.20.63.251
+
+  db:
+    # The app reaches the database on the compose network.
+    ports: !reset []
+
+  # ------------------------------------------------------------- web
+  nginx-web:            # public site + staging vhost (Host: staging.lab.local)
+    image: nginx:1.27.3-alpine
+    configs:
+      - { source: nginx-web-conf, target: /etc/nginx/conf.d/default.conf }
+      - { source: www-nginx-web, target: /srv/www/index.html }
+      - { source: www-staging, target: /srv/staging/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.0.10 }
+    restart: unless-stopped
+
+  nginx-tls:            # 80 -> 301 https, 443 self-signed (CN=secure.lab.local)
+    image: nginx:1.27.3-alpine
+    configs:
+      - { source: nginx-tls-conf, target: /etc/nginx/conf.d/default.conf }
+      - { source: tls-secure-crt, target: /etc/nginx/tls/secure.crt }
+      - { source: tls-secure-key, target: /etc/nginx/tls/secure.key }
+    networks:
+      lab: { ipv4_address: 10.20.0.11 }
+    restart: unless-stopped
+
+  wordpress:
+    image: wordpress:6.6.2-php8.2-apache
+    environment:
+      WORDPRESS_DB_HOST: 10.20.1.21
+      WORDPRESS_DB_USER: wp
+      WORDPRESS_DB_PASSWORD: wp-lab-pass
+      WORDPRESS_DB_NAME: wordpress
+    depends_on: [wp-db]
+    networks:
+      lab: { ipv4_address: 10.20.1.20 }
+    restart: unless-stopped
+
+  wp-db:
+    image: mariadb:11.4.4
+    command: ["--innodb-buffer-pool-size=32M", "--performance-schema=OFF"]
+    environment:
+      MARIADB_ROOT_PASSWORD: root-lab-pass
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wp
+      MARIADB_PASSWORD: wp-lab-pass
+    networks:
+      lab: { ipv4_address: 10.20.1.21 }
+    restart: unless-stopped
+
+  phpmyadmin:
+    image: phpmyadmin:5.2.1-apache
+    environment:
+      PMA_HOST: 10.20.1.21
+    networks:
+      lab: { ipv4_address: 10.20.1.30 }
+    restart: unless-stopped
+
+  jenkins:
+    image: jenkins/jenkins:2.479.3-lts-jdk17
+    environment:
+      JAVA_OPTS: "-Xmx384m -Djenkins.install.runSetupWizard=false"
+    networks:
+      lab: { ipv4_address: 10.20.2.40 }
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    networks:
+      lab: { ipv4_address: 10.20.3.50 }
+    restart: unless-stopped
+
+  tomcat:               # Tomcat 9 with the manager app reachable remotely (tomcat/tomcat)
+    image: tomcat:9.0.97-jre17
+    command:
+      - sh
+      - -c
+      - >-
+        cp -r /usr/local/tomcat/webapps.dist/ROOT /usr/local/tomcat/webapps.dist/manager /usr/local/tomcat/webapps/ &&
+        cp /lab/manager-context.xml /usr/local/tomcat/webapps/manager/META-INF/context.xml &&
+        cp /lab/tomcat-users.xml /usr/local/tomcat/conf/tomcat-users.xml &&
+        exec catalina.sh run
+    environment:
+      CATALINA_OPTS: "-Xmx192m"
+    configs:
+      - { source: tomcat-manager-context, target: /lab/manager-context.xml }
+      - { source: tomcat-users, target: /lab/tomcat-users.xml }
+    networks:
+      lab: { ipv4_address: 10.20.4.60 }
+    restart: unless-stopped
+
+  gitea:                # another web UI: web 3000 + built-in OpenSSH 22
+    image: gitea/gitea:1.22.3
+    environment:
+      GITEA__security__INSTALL_LOCK: "true"
+      GITEA__database__DB_TYPE: sqlite3
+      GITEA__server__DOMAIN: git.lab.local
+    networks:
+      lab: { ipv4_address: 10.20.5.70 }
+    restart: unless-stopped
+
+  admin-app:            # simple app with /login form and /admin (401 Basic)
+    image: nginx:1.27.3-alpine
+    configs:
+      - { source: admin-app-conf, target: /etc/nginx/conf.d/default.conf }
+      - { source: admin-app-htpasswd, target: /etc/nginx/admin.htpasswd }
+      - { source: www-admin-app-index, target: /srv/www/index.html }
+      - { source: www-admin-app-login, target: /srv/www/login.html }
+      - { source: www-admin-app-admin, target: /srv/www/admin.html }
+    networks:
+      lab: { ipv4_address: 10.20.9.110 }
+    restart: unless-stopped
+
+  apache:               # version changes between runs (lab/variants)
+    image: httpd:2.4.58-alpine
+    networks:
+      lab: { ipv4_address: 10.20.40.70 }
+    restart: unless-stopped
+
+  adminer:
+    image: adminer:4.8.1
+    networks:
+      lab: { ipv4_address: 10.20.44.80 }
+    restart: unless-stopped
+
+  haproxy:
+    image: haproxy:3.0.6-alpine
+    configs:
+      - { source: haproxy-cfg, target: /usr/local/etc/haproxy/haproxy.cfg }
+    networks:
+      lab: { ipv4_address: 10.20.52.100 }
+    restart: unless-stopped
+
+  web-8443:             # HTTPS on 8443 with an expired self-signed certificate
+    image: nginx:1.27.3-alpine
+    configs:
+      - { source: web-8443-conf, target: /etc/nginx/conf.d/default.conf }
+      - { source: tls-expired-crt, target: /etc/nginx/tls/expired.crt }
+      - { source: tls-expired-key, target: /etc/nginx/tls/expired.key }
+    networks:
+      lab: { ipv4_address: 10.20.56.110 }
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- infra / data
+  sshd:
+    <<: *targets
+    networks:
+      lab: { ipv4_address: 10.20.6.80 }
+
+  mysql:
+    image: mysql:8.4.3
+    command: ["--innodb-buffer-pool-size=32M", "--performance-schema=OFF"]
+    environment:
+      MYSQL_ROOT_PASSWORD: root-lab-pass
+    networks:
+      lab: { ipv4_address: 10.20.7.90 }
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16.6-alpine
+    environment:
+      POSTGRES_PASSWORD: pg-lab-pass
+    networks:
+      lab: { ipv4_address: 10.20.10.120 }
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.4.1-alpine
+    networks:
+      lab: { ipv4_address: 10.20.11.130 }
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10.22-alpine
+    command: ["-m", "8222"]
+    networks:
+      lab: { ipv4_address: 10.20.12.140 }
+    restart: unless-stopped
+
+  memcached:            # removed in run2 / run3
+    image: memcached:1.6.32-alpine
+    networks:
+      lab: { ipv4_address: 10.20.36.60 }
+    restart: unless-stopped
+
+  coredns:              # DNS for lab.local names (incl. staging.lab.local)
+    image: coredns/coredns:1.11.3
+    command: ["-conf", "/etc/coredns/Corefile"]
+    configs:
+      - { source: corefile, target: /etc/coredns/Corefile }
+    networks:
+      lab: { ipv4_address: 10.20.48.90 }
+    restart: unless-stopped
+
+  # ------------------------------------------------------------- IoT
+  mosquitto:            # MQTT broker, anonymous access
+    image: eclipse-mosquitto:2.0.20
+    configs:
+      - { source: mosquitto-conf, target: /mosquitto/config/mosquitto.conf }
+    networks:
+      lab: { ipv4_address: 10.20.8.100 }
+    restart: unless-stopped
+
+  telnet-iot:           # "IoT router": telnet 23 + web management 80 (telnet closed in run2/run3)
+    <<: *targets
+    command: ["sh", "-c", "busybox-extras httpd -p 80 -h /www && exec /lab/telnet-banner.sh 23"]
+    configs:
+      - { source: www-telnet-iot, target: /www/index.html }
+      - { source: telnet-banner, target: /lab/telnet-banner.sh, mode: 0555 }
+    networks:
+      lab: { ipv4_address: 10.20.24.30 }
+
+  ipcam:                # "IP camera" web UI
+    <<: *busybox
+    command: ["httpd", "-f", "-v", "-p", "80", "-h", "/www"]
+    configs:
+      - { source: www-ipcam, target: /www/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.32.50 }
+
+  # ------------------------------------------------------------- minimal hosts
+  bb-http:              # gains port 8000 in run2 / run3
+    <<: *busybox
+    command: ["httpd", "-f", "-v", "-p", "80", "-h", "/www"]
+    configs:
+      - { source: www-bb-http, target: /www/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.16.10 }
+
+  bb-http-alt:
+    <<: *busybox
+    command: ["httpd", "-f", "-v", "-p", "8080", "-h", "/www"]
+    configs:
+      - { source: www-bb-http-alt, target: /www/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.16.11 }
+
+  ftp-banner:
+    <<: *targets
+    command: ["/lab/banner.sh", "21", "220 (vsFTPd 3.0.3)"]
+    configs:
+      - { source: banner, target: /lab/banner.sh, mode: 0555 }
+    networks:
+      lab: { ipv4_address: 10.20.20.20 }
+
+  smtp-banner:          # banner changes in run3 (Postfix -> Exim)
+    <<: *targets
+    command: ["/lab/banner.sh", "25", "220 mail.lab.local ESMTP Postfix (Debian/GNU)"]
+    configs:
+      - { source: banner, target: /lab/banner.sh, mode: 0555 }
+    networks:
+      lab: { ipv4_address: 10.20.20.21 }
+
+  legacy-ssh:           # old OpenSSH banner; "upgraded" in run2
+    <<: *targets
+    command: ["/lab/banner.sh", "22", "SSH-2.0-OpenSSH_7.4"]
+    configs:
+      - { source: banner, target: /lab/banner.sh, mode: 0555 }
+    networks:
+      lab: { ipv4_address: 10.20.28.40 }
+
+  flappy:               # unstable host: up in run1, gone in run2, back in run3
+    <<: *busybox
+    command: ["httpd", "-f", "-v", "-p", "80", "-h", "/www"]
+    configs:
+      - { source: www-flappy, target: /www/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.60.120 }
+
+# Lab files. "$$" is a literal "$" (compose interpolates "$").
+configs:
+  nginx-web-conf:
+    content: |
+      # nginx-web (10.20.0.10): public site + "staging" virtual host selected by Host header.
+      server {
+          listen 80 default_server;
+          server_name www.lab.local lab.local _;
+          root /srv/www;
+          index index.html;
+      }
+      server {
+          listen 80;
+          server_name staging.lab.local;
+          root /srv/staging;
+          index index.html;
+          add_header X-Environment staging always;
+      }
+  nginx-tls-conf:
+    content: |
+      # nginx-tls (10.20.0.11): HTTP->HTTPS redirect + self-signed certificate (CN=secure.lab.local).
+      server {
+          listen 80 default_server;
+          return 301 https://$$host$$request_uri;
+      }
+      server {
+          listen 443 ssl default_server;
+          server_name secure.lab.local;
+          ssl_certificate     /etc/nginx/tls/secure.crt;
+          ssl_certificate_key /etc/nginx/tls/secure.key;
+          location / { default_type text/html; return 200 "<html><head><title>ACME Secure Portal</title></head><body><h1>ACME Secure Portal</h1></body></html>\n"; }
+      }
+  admin-app-conf:
+    content: |
+      # admin-app (10.20.9.110): simple app exposing /login (form) and /admin (HTTP Basic, 401).
+      server {
+          listen 80 default_server;
+          root /srv/www;
+          index index.html;
+          location = /login { default_type text/html; try_files /login.html =404; }
+          location /admin {
+              auth_basic "Admin Panel";
+              auth_basic_user_file /etc/nginx/admin.htpasswd;
+              default_type text/html;
+              try_files /admin.html =404;
+          }
+      }
+  admin-app-htpasswd:
+    content: |
+      admin:$$apr1$$PNh6jLVh$$MK6fu.gc9Maf7m4EkkGEV/
+  web-8443-conf:
+    content: |
+      # web-8443 (10.20.56.110): HTTPS on 8443 with an EXPIRED self-signed certificate (CN=old.lab.local, 2020-2021).
+      server {
+          listen 8443 ssl default_server;
+          server_name old.lab.local;
+          ssl_certificate     /etc/nginx/tls/expired.crt;
+          ssl_certificate_key /etc/nginx/tls/expired.key;
+          location / { default_type text/html; return 200 "<html><head><title>Legacy Reporting</title></head><body><h1>Legacy Reporting</h1></body></html>\n"; }
+      }
+  tls-secure-crt:
+    content: |
+      -----BEGIN CERTIFICATE-----
+      MIIDPTCCAiWgAwIBAgIUH9kg7Boi4NKIK07bqBN4kdoRXEEwDQYJKoZIhvcNAQEL
+      BQAwLjERMA8GA1UECgwIQUNNRSBMYWIxGTAXBgNVBAMMEHNlY3VyZS5sYWIubG9j
+      YWwwHhcNMjYxMTIxMTQ0ODMxWhcNMzYxMTE4MTQ0ODMxWjAuMREwDwYDVQQKDAhB
+      Q01FIExhYjEZMBcGA1UEAwwQc2VjdXJlLmxhYi5sb2NhbDCCASIwDQYJKoZIhvcN
+      AQEBBQADggEPADCCAQoCggEBAJXIma1AMg2qj3cyfAT2FoFzwTNTkCoznbHtRlVk
+      OOmVRAATYdoHa/sFuCyOiTPjQAxzZd/mlpyt3gcu8rtAYe2lWGzKR1zgTByy4mvo
+      56IfCz7vJGa0Z9R5rEzs3OPWL53XqkcaXANitRtZaljGGnsNAEY4t7WkWBzv2ZuU
+      ZJMRCirCHjBxaAqsilw5gSOWG/IG0Ao+xZLFUZhg4q8XIeGvdDqUpgPcYJIVQsya
+      osNTFnqS04cPFfEVIIS/Z7EJuR6Kw2C/q2eeWFili+euJLouP1D4gtMWPyYo4Rs+
+      jnjYaUGhaZB7j+At9vUej5iIdNHtwfZqXE83vIzBhbblVLsCAwEAAaNTMFEwHQYD
+      VR0OBBYEFNB/hUCpDoQDK+f9sRDdAfvE1Q4QMB8GA1UdIwQYMBaAFNB/hUCpDoQD
+      K+f9sRDdAfvE1Q4QMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEB
+      AFHxXFJIDCK5ko25BMXcSSk9LKp6EBArQCZaL6icqZDv4y8elekuQX7Oyk9lipjM
+      e2r/KUIIXxiQQzML63QLVrU8vs6F/opXJdkVOVR01IA6Jiq1iqn4OZ80gvP5V29f
+      xwJenBYc8s4Sz0Jqpv+BblSFDqosfFbCgJBeA24Fn+xg+0rn0/c+ETEDeAVn/l34
+      jjs0iHHr6Nnp1lLylN9mNCMDhA6Jlti7gfyhEWCQ6+0ZaFjSkDMw4RgeNl7HioJD
+      dDikIPIy8EJYSkT12lzT4Ud5sgqkVvumzrjQpTXhx23VkI3/x23ESf0FuyMisl7n
+      spLM9btsVdYV731CtUdXaAo=
+      -----END CERTIFICATE-----
+  tls-secure-key:
+    content: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCVyJmtQDINqo93
+      MnwE9haBc8EzU5AqM52x7UZVZDjplUQAE2HaB2v7Bbgsjokz40AMc2Xf5pacrd4H
+      LvK7QGHtpVhsykdc4EwcsuJr6OeiHws+7yRmtGfUeaxM7Nzj1i+d16pHGlwDYrUb
+      WWpYxhp7DQBGOLe1pFgc79mblGSTEQoqwh4wcWgKrIpcOYEjlhvyBtAKPsWSxVGY
+      YOKvFyHhr3Q6lKYD3GCSFULMmqLDUxZ6ktOHDxXxFSCEv2exCbkeisNgv6tnnlhY
+      pYvnriS6Lj9Q+ILTFj8mKOEbPo542GlBoWmQe4/gLfb1Ho+YiHTR7cH2alxPN7yM
+      wYW25VS7AgMBAAECggEARuJbT/Fsfqk0If3jUVnAxtyoFwk51a79tyGKQokeofSA
+      7OQ/T7ZpdK99PKDr74FhY0MNeEuhBV8HDzE5sEJE1fmFAl8sLJj9jCtgGh9r136H
+      jO4RtQU1iglW8ES8OJq5iCJzNBkWaIfDG8FSIdcG2ysI8TKQRkcTaAZeXlF401vo
+      cpI26Nag5zgpz03dWiGNNErt3Uccq4yBRY/i72UeuyxryxWeveqRApwMTb9N+rSC
+      rWFbsPci6PrticjZDfbTwi2lC8Z1ZN4j977iMlmFwSdiLQtzLusVy/orTCE2QUQM
+      Drp4VRtkclNPA+ImjQUiRmrLhsAux2/oNQOvRBUv0QKBgQDOUNJPhjP/SlKBVz1W
+      sKLylGXDJtriQqXdv5heC1/ygexywaPleiEYa5qAHWZ0K7Dkvb8GaUhG5BWSyOSu
+      P3/Umh/hyCTBqbcnTLQBmhG4mjnJtcyzrlFGIItYMPWyZGraDTOYnvcpEz9oe/cD
+      2U1le0Gupi/lha+0ab8pFyMImQKBgQC52p/nZupNE6SaLhF20u/udS1HBzinTwYM
+      SE1+z1AoHccGmBJF+AlTHlctixQ5eJo79QEXOhkFNoi5SN87gSPKxdPjPlOBdQo9
+      XvS38j2j16xCIVX8To680xFWULSFya02TVO/0/Yt6nEy+8pQBOXNGnVJDzSIgOxD
+      jvcRY984cwKBgAoxiBKRyOPmIiltzAQKeiKOHnED7HCdZmCMZNTQrw7mSG5rDtP5
+      ssToHBwUV8mJlxXWIigI759BCafU8SeCz6gLbWPUZayD3B6+9W3W1OVQCWbj6pc+
+      F5nlZb0XvivwNi9L067Iu+F1p/5bkZrJE7/d1SLx5w/qCQJa7yzyjbKRAoGAX09/
+      24LKu3ZMXokriZ1JUCelbZyFcD+1YU0e+N5GRBxpObd4/4rg9VBE8uU1HPf9WKwf
+      wBKaTDMYULTPTku+2Dk1nX8UAfrMooZ0x3SiKcjr3QoNd5Ot3aX8aSCAQ3AWtRdY
+      0LJZuFhXbwbzTLAGTXW5GhuDHFHJWCgUCkYGboMCgYBzCh4NLzrZpKVW+dmErxCd
+      f3gTD074YKo0elPGtTPFQ+cEMV3BsCjL4a+cGxkCI4Jxfs8Rms3mt04YHqcJNLkn
+      0pF9dOZmx1JvmXog6pYkH5KyNeEo3RNbvnhNCpLrHiDBBlUvl6G3pOCE+cKIrACw
+      KcmKiyNUYdg7u+Uj4IvYXA==
+      -----END PRIVATE KEY-----
+  tls-expired-crt:
+    content: |
+      -----BEGIN CERTIFICATE-----
+      MIIDNzCCAh+gAwIBAgIUCJ15XoTsv5fGmD7IJtlTGUQs47swDQYJKoZIhvcNAQEL
+      BQAwKzERMA8GA1UECgwIQUNNRSBMYWIxFjAUBgNVBAMMDW9sZC5sYWIubG9jYWww
+      HhcNMjAwMTAxMDAwMDAwWhcNMjEwMTAxMDAwMDAwWjArMREwDwYDVQQKDAhBQ01F
+      IExhYjEWMBQGA1UEAwwNb2xkLmxhYi5sb2NhbDCCASIwDQYJKoZIhvcNAQEBBQAD
+      ggEPADCCAQoCggEBAOnKJXXu/wyrZy4NQhbgW7aTNLvFSLQeRSBDBCBZcsDdRx+J
+      BJEHH1knABcOUUK/1eUesDKwvSTzfWegJ9E/0YpKrEKzNeSBfqDxDzU6tRR9S9mY
+      lUHNXrIM5XLFlk/Oja5s6nZ+whvBFl4blAoQSfH+07AJEGAePX7iDnrn7+eOEJMf
+      XNG0GVVgZaHt4yQResVO5baLfHqIGoFs9WZQdyOC3vNElrqfkbmAXESD/usoz2Fy
+      0fNWVbXvxkloIPXSbGBT/lk6dpugZcNA3/sRa4FSzTC4CM2NYwHLhAEE/QLbvv64
+      4+3GtoaFAcj4HQrwUNuOZ9194/Z+8tkwHAgl22kCAwEAAaNTMFEwHQYDVR0OBBYE
+      FB75+L5kXb3+jtGS9sNEz2dQ7XecMB8GA1UdIwQYMBaAFB75+L5kXb3+jtGS9sNE
+      z2dQ7XecMA8GA1UdEwEB/wQFMAMBAf8wDQYJKoZIhvcNAQELBQADggEBAOROZ12y
+      gxd63bFWI2kQk1FVIXoLppM5cZ1yRTMvtATekWEI0joQQl79v+kj9NxBvG4W3tA7
+      YxBnc10H7E0iwzOZih7C+KKroKqbFkje4koyprDWP0Kzwo+llWhpzLOLFlqPYKz0
+      fRod9oGVLAOfxLwDSbD1pjhxtdO6hVxaZmieI1UzFR9J3WVbkWEebkmlxYXSEYz7
+      RqorqVOBmOJingH6maJ8Qjvl5olLces65JVN1ATAsIvzUIjwNqesQCW64U3qjbSa
+      9vX3QkOPlVsTQONRJaUkoNjxOV0t0qfizE9Y1wBQu49RIfIidb5E8zYxo87NCGOY
+      Z6vkXLRBY8WpFfI=
+      -----END CERTIFICATE-----
+  tls-expired-key:
+    content: |
+      -----BEGIN PRIVATE KEY-----
+      MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDpyiV17v8Mq2cu
+      DUIW4Fu2kzS7xUi0HkUgQwQgWXLA3UcfiQSRBx9ZJwAXDlFCv9XlHrAysL0k831n
+      oCfRP9GKSqxCszXkgX6g8Q81OrUUfUvZmJVBzV6yDOVyxZZPzo2ubOp2fsIbwRZe
+      G5QKEEnx/tOwCRBgHj1+4g565+/njhCTH1zRtBlVYGWh7eMkEXrFTuW2i3x6iBqB
+      bPVmUHcjgt7zRJa6n5G5gFxEg/7rKM9hctHzVlW178ZJaCD10mxgU/5ZOnaboGXD
+      QN/7EWuBUs0wuAjNjWMBy4QBBP0C277+uOPtxraGhQHI+B0K8FDbjmfdfeP2fvLZ
+      MBwIJdtpAgMBAAECggEAV9Ok9wTts6jAfkBkz4tBaPksGk4m3eNxPIlwh2aTAXkf
+      Ou2SVZlDYY6RLhgm1tiSVhyNPL3AkJ0YQ1GbI7TB1x3uULBaUpmDJJrqh6iiViwr
+      znbPu4SXSnQlzlQD/78s4pXwDsvXx+1lpbzehFlSLiL5C2ycRj+WApCRuAJh0a6J
+      IRe2dOiJKwwH2+tQLpJ2fnhQqxup0Jr9ln8H2l0gnJAHi6muV7Mslt+ITz6cFqFD
+      1cnqrmJLHTSBLgxI/EtlA+GdlMgUl6k8jTynzgxnTl22F9POX0H0NNn/A6MVTm4x
+      DzLrtQIVPdypfdKORFr2w84tJ9FupsvmLukeNBWHsQKBgQD3Wta5tamJUBfVkKId
+      vIqQf/HApqRr6/jBCx+kuOpOtICiOKn0R07T5XlD7YOTgSLXs0/HlopbO6n9oXLY
+      61G4smiKrIN0osrsx7xeKS9wq8WWQ/IyLK4DF1cwvpqOGm7lM5vsgwVEYahDAX7h
+      wfUW/dNoW2apD2dvHU4MBjvckwKBgQDx9e932OFdXZzhrAcPS0zMuxUIaT0770uI
+      B6kLCZlJEOEBAXbi0iE9friJMTSf7qWSnvqmSdy5eWcy+xXw+4aNgVjdoG2KpYwa
+      CxolH9MIvSBc7JYxRH4t5JEmZ/Oi10C6C0pFkcrH3bhGjUkbxP8ab2sMQZiOYDkx
+      r1RYqBPhkwKBgFAUL4oF3vIeZOj2HxXjcTSgx0JocLijt2+/yynH18tNMovSLmtw
+      HnwJQX4VSdCaMQ6F9aEXAonQwhLjjsvdOyLBV4j1msVK4slPTJNrX/lpEtm3+5P0
+      1Q0ZJFgajOzOb/JyB9vE+xKNTy0KMeqioVclK6kQVicLXqAha6AG8KBTAoGAGlD9
+      crOMD3OXFJR5UBiIidvvNbL8jgBA3tK2eBTbLy8+ybU3EQR5yQ53U7SeXKbAK2pP
+      KLbv4txpdQoKIOO6hrmCyNgiEepfipWail8jvNeVJYY177XbY3JwtxSnUxbGW3XO
+      5jItM//Rgxrq0LJkbKOhqPuZdCLTFaxUKDBfuTECgYB+rd7FwOkx07fRx0DFGIva
+      iexWyOoXlh9sqm1NWaSVbPKJX3NRpq3Ib/Z8Mpm4iBUZtPHfWhlNvc/ZACQ94qjl
+      T5Hb+1K4MmP+wfMBwfstiJYbn8QH/NDARX7d+DTqD9xSoY59BTqnarRengn6byvB
+      adnqGul6WXDgP6+7hU941Q==
+      -----END PRIVATE KEY-----
+  tomcat-manager-context:
+    content: |
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!-- Manager app reachable from any address (default image restricts it to localhost). -->
+      <Context antiResourceLocking="false" privileged="true">
+        <Manager sessionAttributeValueClassNameFilter="java\.lang\.(?:Boolean|Integer|Long|Number|String)|org\.apache\.catalina\.filters\.CsrfPreventionFilter\$$LruCache(?:\$$1)?|java\.util\.(?:Linked)?HashMap"/>
+      </Context>
+  tomcat-users:
+    content: |
+      <?xml version="1.0" encoding="UTF-8"?>
+      <!-- Lab-only credentials: tomcat / tomcat (classic default) -->
+      <tomcat-users xmlns="http://tomcat.apache.org/xml" version="1.0">
+        <role rolename="manager-gui"/>
+        <user username="tomcat" password="tomcat" roles="manager-gui"/>
+      </tomcat-users>
+  haproxy-cfg:
+    content: |
+      global
+          log stdout format raw local0
+      defaults
+          mode http
+          timeout connect 5s
+          timeout client 30s
+          timeout server 30s
+      frontend web
+          bind :80
+          stats enable
+          stats uri /haproxy?stats
+          # everything except the stats page gets a fixed landing page (stats stay reachable)
+          http-request return status 200 content-type text/html string "<html><head><title>Load balancer</title></head><body>lb ok</body></html>" unless { path /haproxy }
+  corefile:
+    content: |
+      # timeouts: CoreDNS closes an idle TCP connection after 3 s by default, which is exactly nmap's
+      # "tcpwrapped" threshold for the NULL probe, so -sV flipped between "NLnet Labs NSD" and
+      # "tcpwrapped". With 10 s the NULL probe times out cleanly and the DNS probe always answers.
+      lab.local:53 {
+          timeouts {
+              read 10s
+              idle 15s
+          }
+          hosts {
+              10.20.0.10 www.lab.local lab.local staging.lab.local
+              10.20.0.11 secure.lab.local
+              10.20.1.20 blog.lab.local
+              10.20.2.40 jenkins.lab.local
+              10.20.3.50 grafana.lab.local
+              10.20.5.70 git.lab.local
+              10.20.9.110 app.lab.local
+              10.20.56.110 old.lab.local
+              fallthrough
+          }
+      }
+      .:53 {
+          timeouts {
+              read 10s
+              idle 15s
+          }
+          errors
+      }
+  mosquitto-conf:
+    content: |
+      listener 1883
+      allow_anonymous true
+      persistence false
+      log_dest stdout
+  banner:
+    content: |
+      #!/bin/sh
+      # banner.sh PORT TEXT... : tiny fake TCP service that sends one banner line (CRLF) and then
+      # swallows client input for up to 10 s. Used for services that only need a recognisable banner.
+      port="$$1"; shift
+      printf '%s\r\n' "$$*" > /tmp/banner
+      exec socat TCP-LISTEN:"$$port",fork,reuseaddr SYSTEM:'cat /tmp/banner; timeout 10 cat >/dev/null'
+  telnet-banner:
+    content: |
+      #!/bin/sh
+      # Fake "IoT router" telnet service (10.20.24.30:23): sends the BusyBox telnetd option negotiation and
+      # a login prompt as ONE write, then swallows client input for up to 10 s.
+      # Why not the real busybox telnetd: it sends the IAC bytes and the "\r\r\n<host> login: " prompt in
+      # separate writes that race each other, so `nmap -sV` reported version "" in some scans and
+      # "1.14.0 or later" in others (soft match on a partial read). That flake shows up as a false
+      # "changed" between runs. With one write nmap always reports product "BusyBox telnetd", version "".
+      port="$${1:-23}"
+      printf '\377\375\001\377\375\037\377\373\001\377\373\003\r\r\nrouter login: ' > /tmp/telnet-banner
+      exec socat TCP-LISTEN:"$$port",fork,reuseaddr SYSTEM:'cat /tmp/telnet-banner; timeout 10 cat >/dev/null'
+  www-nginx-web:
+    content: |
+      <!doctype html><html><head><title>ACME Corp</title></head><body><h1>ACME Corp</h1><p>Welcome to the public website.</p></body></html>
+  www-staging:
+    content: |
+      <!doctype html><html><head><title>ACME Corp - STAGING</title></head><body><h1>STAGING environment</h1><p>Internal pre-release build. Do not expose.</p></body></html>
+  www-admin-app-index:
+    content: |
+      <!doctype html><html><head><title>ACME Internal App</title></head><body><h1>ACME Internal App</h1><a href="/login">Login</a> | <a href="/admin">Admin</a></body></html>
+  www-admin-app-login:
+    content: |
+      <!doctype html><html><head><title>Login - ACME Internal App</title></head><body><h1>Sign in</h1><form method="post" action="/login"><input name="username" placeholder="Username"><input name="password" type="password" placeholder="Password"><button type="submit">Log in</button></form></body></html>
+  www-admin-app-admin:
+    content: |
+      <!doctype html><html><head><title>Admin Panel</title></head><body><h1>Admin Panel</h1></body></html>
+  www-telnet-iot:
+    content: |
+      <html><head><title>Wireless Router Setup</title></head><body><h1>Router Web Management</h1><form><input name="user"><input name="pass" type="password"></form></body></html>
+  www-ipcam:
+    content: |
+      <html><head><title>IP Camera - Live View</title></head><body><h1>Network Camera</h1><img src="/snapshot.jpg"></body></html>
+  www-bb-http:
+    content: |
+      <html><head><title>Build artifacts</title></head><body><h1>Index of /builds</h1></body></html>
+  www-bb-http-alt:
+    content: |
+      <html><head><title>Monitoring agent</title></head><body><h1>agent status: OK</h1></body></html>
+  www-flappy:
+    content: |
+      <html><head><title>Temporary test box</title></head><body><h1>flappy</h1></body></html>
+  www-intranet:
+    content: |
+      <html><head><title>ACME Intranet</title></head><body><h1>ACME Intranet</h1></body></html>

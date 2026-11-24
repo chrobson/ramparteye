@@ -1,0 +1,27 @@
+# run3 vs run2 (ground truth: lab/expected/run3.json)
+#   host_up    10.20.60.120 flappy      (the unstable host is back: up/down/up = unstable)
+#   changed    10.20.20.21:25           Postfix -> Exim (banner/product change)
+#   changed    10.20.0.10:80            nginx 1.27.3 -> 1.26.2 (rollback)
+#   everything else as in run2 (memcached still gone, telnet still closed, intranet and :8000 stay)
+services:
+  memcached:
+    scale: 0
+  telnet-iot:
+    command: ["busybox-extras", "httpd", "-f", "-p", "80", "-h", "/www"]
+  bb-http:
+    command: ["sh", "-c", "httpd -p 8000 -h /www && exec httpd -f -v -p 80 -h /www"]
+  apache:
+    image: httpd:2.4.62-alpine
+  legacy-ssh:
+    command: ["/lab/banner.sh", "22", "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"]
+  intranet:
+    image: httpd:2.4.62-alpine
+    configs:
+      - { source: www-intranet, target: /usr/local/apache2/htdocs/index.html }
+    networks:
+      lab: { ipv4_address: 10.20.58.10 }
+    restart: unless-stopped
+  smtp-banner:
+    command: ["/lab/banner.sh", "25", "220 mail.lab.local ESMTP Exim 4.96 Fri, 21 Nov 2026 12:00:00 +0000"]
+  nginx-web:
+    image: nginx:1.26.2-alpine
