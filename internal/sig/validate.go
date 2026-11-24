@@ -22,7 +22,7 @@ const (
 	maxRegexLen  = 1024
 	// RE2 runs in time linear in input x program size, and a match cannot
 	// be interrupted, so the program size and counted repeats are bounded.
-	maxRegexInst   = 3000
+	maxRegexInst   = 500
 	maxRegexRepeat = 100
 
 	maxCWE         = 5

@@ -323,6 +323,7 @@ func TestProbeGateGetsUnmappedIP(t *testing.T) {
 // Body regexes see at most the first maxRegexInput bytes.
 func TestBodyRegexInputCapped(t *testing.T) {
 	s := mustParse(t, "id: tail\nname: T\ncategory: other\nconfidence: 5\nmatchers:\n  - {type: body, regex: 'TAIL'}\n")
+	assert.Equal(t, 64<<10, maxRegexInput)
 	head := string(bytes.Repeat([]byte("a"), maxRegexInput))
 
 	assert.Len(t, 0, match(NewEngine([]*Signature{s}, nil), svc(80, ""), httpObs(80, "", head+"TAIL", nil)))

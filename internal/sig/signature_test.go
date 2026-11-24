@@ -247,6 +247,24 @@ func TestRegexCostBounded(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// The instruction limit is maxRegexInst (500): exactly 500 passes, 501
+// and the 503-instruction ".{100}" x5 pattern do not.
+func TestRegexInstLimit(t *testing.T) {
+	body := func(re string) []byte {
+		return []byte("id: x-inst\nname: X\ncategory: other\nconfidence: 5\nmatchers:\n  - type: body\n    regex: '" + re + "'\n")
+	}
+	four := strings.Repeat(`.{100}`, 4)
+
+	_, err := Parse(body(four + `.{97}\x00`)) // 500 instructions
+	assert.NoError(t, err)
+
+	_, err = Parse(body(four + `.{98}\x00`)) // 501
+	assert.ErrorContain(t, "regex too complex (501 instructions, max 500)", err)
+
+	_, err = Parse(body(strings.Repeat(`.{100}`, 5) + `\x00`)) // 503
+	assert.ErrorContain(t, "regex too complex", err)
+}
+
 // Only allowlisted request headers pass, so a path probe cannot override
 // the method, rewrite the URL or spoof the client address.
 func TestPathProbeHeaderAllowlist(t *testing.T) {

@@ -21,7 +21,7 @@ const maxEvidence = 200
 
 // maxRegexInput caps the body bytes a regex reads (the start of the page
 // carries the fingerprints; this bounds the cost of every body match).
-const maxRegexInput = 256 << 10
+const maxRegexInput = 64 << 10
 
 // regexInput returns the part of a body regexes are run on.
 func regexInput(b []byte) string {
