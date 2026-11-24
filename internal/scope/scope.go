@@ -26,31 +26,46 @@ type Scope struct {
 
 // New builds a scope from allowed prefixes, single allowed hosts and excluded
 // addresses. All inputs are normalised (IPv4-mapped IPv6 unmapped, zones
-// stripped, prefixes masked); invalid entries are dropped.
-func New(allowed []netip.Prefix, hosts []netip.Addr, exclude []netip.Addr) Scope {
+// stripped, prefixes masked). An invalid (zero) prefix or address is an error:
+// a dropped exclusion would silently widen what gets scanned.
+func New(allowed []netip.Prefix, hosts []netip.Addr, exclude []netip.Addr) (Scope, error) {
 	var s Scope
 	for _, p := range allowed {
-		if p = normPrefix(p); p.IsValid() {
-			s.allowed = append(s.allowed, p)
+		n := normPrefix(p)
+		if !n.IsValid() {
+			return Scope{}, errors.New("scope: invalid allowed prefix")
 		}
+		s.allowed = append(s.allowed, n)
 	}
 	for _, a := range hosts {
-		if a = normAddr(a); a.IsValid() {
-			s.allowed = append(s.allowed, netip.PrefixFrom(a, a.BitLen()))
+		n := normAddr(a)
+		if !n.IsValid() {
+			return Scope{}, errors.New("scope: invalid allowed host")
 		}
+		s.allowed = append(s.allowed, netip.PrefixFrom(n, n.BitLen()))
 	}
 	for _, a := range exclude {
-		if a = normAddr(a); a.IsValid() {
-			s.exclude = append(s.exclude, a)
+		n := normAddr(a)
+		if !n.IsValid() {
+			return Scope{}, errors.New("scope: invalid excluded address")
 		}
+		s.exclude = append(s.exclude, n)
 	}
-	return s
+	return s, nil
+}
+
+// translation holds the IPv6 blocks that embed IPv4 space. An IPv6 scope must
+// never grant IPv4 hosts through them: IPv4-mapped addresses are decided only
+// via their IPv4 form, and NAT64 addresses are never allowed.
+var translation = []netip.Prefix{
+	netip.MustParsePrefix("::ffff:0:0/96"),
+	netip.MustParsePrefix("64:ff9b::/96"),
 }
 
 // Allows reports whether a is inside the scope and not excluded.
 func (s Scope) Allows(a netip.Addr) bool {
 	a = normAddr(a)
-	if !a.IsValid() || slices.Contains(s.exclude, a) {
+	if !a.IsValid() || slices.Contains(s.exclude, a) || inTranslation(a) {
 		return false
 	}
 	for _, p := range s.allowed {
@@ -73,12 +88,33 @@ func (s Scope) CheckPrefix(q netip.Prefix) error {
 	if !n.IsValid() {
 		return fmt.Errorf("%w: invalid prefix", ErrOutOfScope)
 	}
+	if n.Addr().Is6() && inTranslation(n) {
+		return fmt.Errorf("%w: %s overlaps an IPv4 translation block", ErrOutOfScope, n)
+	}
 	for _, p := range s.allowed {
 		if p.Addr().Is4() == n.Addr().Is4() && p.Bits() <= n.Bits() && p.Contains(n.Addr()) {
 			return nil
 		}
 	}
 	return fmt.Errorf("%w: %s", ErrOutOfScope, n)
+}
+
+// inTranslation reports whether an IPv6 address or prefix (still IPv6 after
+// normalisation) overlaps a translation block.
+func inTranslation[T netip.Addr | netip.Prefix](x T) bool {
+	for _, b := range translation {
+		switch v := any(x).(type) {
+		case netip.Addr:
+			if v.Is6() && b.Contains(v) {
+				return true
+			}
+		case netip.Prefix:
+			if b.Overlaps(v) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func normAddr(a netip.Addr) netip.Addr {

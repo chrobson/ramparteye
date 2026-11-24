@@ -28,9 +28,17 @@ func fakeResolver(m map[string][]string) (Resolver, *int) {
 	}, &calls
 }
 
-func labScope() scope.Scope {
-	return scope.New([]netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, nil,
+func labScope(t *testing.T) scope.Scope {
+	t.Helper()
+	return mustScope(t, []netip.Prefix{netip.MustParsePrefix("10.20.0.0/16")}, nil,
 		[]netip.Addr{netip.MustParseAddr("10.20.0.99")})
+}
+
+func mustScope(t *testing.T, a []netip.Prefix, h, e []netip.Addr) scope.Scope {
+	t.Helper()
+	s, err := scope.New(a, h, e)
+	assert.NoError(t, err)
+	return s
 }
 
 func TestParseKinds(t *testing.T) {
@@ -51,6 +59,7 @@ func TestParseKinds(t *testing.T) {
 		{"10.0.0.1-10.0.0.5", model.TargetRange, "10.0.0.1-10.0.0.5"},
 		{" 10.0.0.1 - 10.0.0.5 ", model.TargetRange, "10.0.0.1-10.0.0.5"},
 		{"::ffff:10.0.0.1-::ffff:10.0.0.5", model.TargetRange, "10.0.0.1-10.0.0.5"},
+		{"10.0.0.7-10.0.0.7", model.TargetIP, "10.0.0.7"},
 		{"Example.COM.", model.TargetDomain, "example.com"},
 		{"a-b.c1.lab", model.TargetDomain, "a-b.c1.lab"},
 		{"LocalHost.", model.TargetDomain, "localhost"},
@@ -116,7 +125,7 @@ func TestResolveDomainInScope(t *testing.T) {
 	r, _ := fakeResolver(map[string][]string{"app.lab": {"10.20.1.5", "::ffff:10.20.1.6"}})
 	tg, _ := Parse("app.lab")
 
-	got, err := Resolve(context.Background(), tg, r, labScope())
+	got, err := Resolve(context.Background(), tg, r, labScope(t))
 
 	assert.NoError(t, err)
 	assert.Equal(t, []netip.Addr{netip.MustParseAddr("10.20.1.5"), netip.MustParseAddr("10.20.1.6")}, got)
@@ -135,7 +144,7 @@ func TestResolveDomainOutOfScope(t *testing.T) {
 			r, _ := fakeResolver(map[string][]string{"app.lab": addrs})
 			tg, _ := Parse("app.lab")
 
-			_, err := Resolve(context.Background(), tg, r, labScope())
+			_, err := Resolve(context.Background(), tg, r, labScope(t))
 
 			assert.ErrorIs(t, scope.ErrOutOfScope, err)
 		})
@@ -146,7 +155,7 @@ func TestResolveEmptyScopeNoLookup(t *testing.T) {
 	r, calls := fakeResolver(map[string][]string{"app.lab": {"10.20.1.5"}})
 	tg, _ := Parse("app.lab")
 
-	_, err := Resolve(context.Background(), tg, r, scope.New(nil, nil, nil))
+	_, err := Resolve(context.Background(), tg, r, mustScope(t, nil, nil, nil))
 
 	assert.ErrorIs(t, scope.ErrNoScope, err)
 	assert.Equal(t, 0, *calls)
@@ -156,16 +165,16 @@ func TestResolveNoAddressesAndLookupError(t *testing.T) {
 	r, _ := fakeResolver(map[string][]string{"empty.lab": {}})
 
 	tg, _ := Parse("empty.lab")
-	_, err := Resolve(context.Background(), tg, r, labScope())
+	_, err := Resolve(context.Background(), tg, r, labScope(t))
 	assert.ErrorIs(t, ErrNoAddresses, err)
 
 	tg, _ = Parse("missing.lab")
-	_, err = Resolve(context.Background(), tg, r, labScope())
+	_, err = Resolve(context.Background(), tg, r, labScope(t))
 	assert.Error(t, err)
 }
 
 func TestResolveIPCIDRRange(t *testing.T) {
-	s := labScope()
+	s := labScope(t)
 	ctx := context.Background()
 
 	ip, _ := Parse("10.20.1.5")
@@ -221,7 +230,8 @@ func TestPrefixes(t *testing.T) {
 }
 
 func TestSplit24(t *testing.T) {
-	got := Split([]netip.Prefix{netip.MustParsePrefix("10.20.0.0/22")}, 24)
+	got, err := Split([]netip.Prefix{netip.MustParsePrefix("10.20.0.0/22")}, 24)
+	assert.NoError(t, err)
 
 	assert.Equal(t, []netip.Prefix{
 		netip.MustParsePrefix("10.20.0.0/24"),
@@ -233,11 +243,31 @@ func TestSplit24(t *testing.T) {
 
 func TestSplitKeepsSmallerAndClamps(t *testing.T) {
 	small := netip.MustParsePrefix("10.20.0.0/28")
-	assert.Equal(t, []netip.Prefix{small}, Split([]netip.Prefix{small}, 24))
+	got, err := Split([]netip.Prefix{small}, 24)
+	assert.NoError(t, err)
+	assert.Equal(t, []netip.Prefix{small}, got)
 	// bits beyond the family length are clamped: /30 -> four /32.
-	assert.Len(t, 4, Split([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/30")}, 99))
+	got, err = Split([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/30")}, 99)
+	assert.NoError(t, err)
+	assert.Len(t, 4, got)
 	// IPv6 /62 split to /64.
-	assert.Len(t, 4, Split([]netip.Prefix{netip.MustParsePrefix("2001:db8::/62")}, 64))
+	got, err = Split([]netip.Prefix{netip.MustParsePrefix("2001:db8::/62")}, 64)
+	assert.NoError(t, err)
+	assert.Len(t, 4, got)
+}
+
+func TestSplitCap(t *testing.T) {
+	got, err := Split([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, 24)
+	assert.NoError(t, err)
+	assert.Len(t, MaxChunks, got)
+
+	_, err = Split([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/7")}, 24)
+	assert.ErrorIs(t, ErrTooManyChunks, err)
+	_, err = Split([]netip.Prefix{netip.MustParsePrefix("2001:db8::/32")}, 64)
+	assert.ErrorIs(t, ErrTooManyChunks, err)
+	// The cap is cumulative across prefixes.
+	_, err = Split([]netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("11.0.0.0/24")}, 24)
+	assert.ErrorIs(t, ErrTooManyChunks, err)
 }
 
 func TestAddrCount(t *testing.T) {

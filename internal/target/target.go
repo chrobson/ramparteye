@@ -108,6 +108,10 @@ func parseRange(lo, hi string) (model.Target, bool, error) {
 	if !a.Is4() || !b.Is4() || a.Compare(b) > 0 {
 		return model.Target{}, true, fmt.Errorf("%w: ranges are IPv4 only, first <= last", ErrInvalidTarget)
 	}
+	if a == b {
+		// A one-address range is a plain IP so exclusions apply the same way.
+		return model.Target{Kind: model.TargetIP, Value: a.String()}, true, nil
+	}
 	return model.Target{Kind: model.TargetRange, Value: a.String() + "-" + b.String()}, true, nil
 }
 
@@ -317,18 +321,31 @@ func AddrCount(p netip.Prefix) uint64 {
 	return 1 << host
 }
 
+// MaxChunks bounds the number of prefixes Split may return.
+const MaxChunks = 65536
+
+// ErrTooManyChunks is returned when Split would exceed MaxChunks.
+var ErrTooManyChunks = fmt.Errorf("split would produce more than %d chunks", MaxChunks)
+
 // Split cuts each prefix into prefixes of length bits (the scan chunk size,
-// /24 by default). Prefixes already at least that specific are kept; bits
-// larger than the address length is clamped to it. The caller bounds the
-// input (scope-checked, so a /8 yields at most 65536 chunks of /24).
-func Split(ps []netip.Prefix, bits int) []netip.Prefix {
+// /24 by default; the same length applies to IPv4 and IPv6). Prefixes already
+// at least that specific are kept; bits larger than the address length is
+// clamped to it. It returns ErrTooManyChunks when the total would exceed
+// MaxChunks, so a huge prefix cannot exhaust memory.
+func Split(ps []netip.Prefix, bits int) ([]netip.Prefix, error) {
 	var out []netip.Prefix
 	for _, p := range ps {
 		p = p.Masked()
 		want := min(max(bits, p.Bits()), p.Addr().BitLen())
 		if want == p.Bits() {
+			if len(out)+1 > MaxChunks {
+				return nil, ErrTooManyChunks
+			}
 			out = append(out, p)
 			continue
+		}
+		if want-p.Bits() > 16 || len(out)+1<<(want-p.Bits()) > MaxChunks {
+			return nil, ErrTooManyChunks
 		}
 		for c := p.Addr(); p.Contains(c); {
 			out = append(out, netip.PrefixFrom(c, want))
@@ -339,7 +356,7 @@ func Split(ps []netip.Prefix, bits int) []netip.Prefix {
 			c = next
 		}
 	}
-	return out
+	return out, nil
 }
 
 // lastAddr returns the last address of p.
