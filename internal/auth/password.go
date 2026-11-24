@@ -4,6 +4,7 @@ package auth
 
 import (
 	"errors"
+	"sync"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -17,7 +18,7 @@ const (
 
 var (
 	// ErrWeakPassword is returned for passwords shorter than MinPasswordLen.
-	ErrWeakPassword = errors.New("password too short")
+	ErrWeakPassword = errors.New("password shorter than 8 bytes")
 	// ErrLongPassword is returned for passwords longer than MaxPasswordLen
 	// bytes.
 	ErrLongPassword = errors.New("password longer than 72 bytes")
@@ -40,9 +41,16 @@ func HashPassword(pw string) (string, error) {
 
 // CheckPassword reports whether pw matches the bcrypt hash.
 func CheckPassword(hash, pw string) bool {
+	if len(pw) > MaxPasswordLen {
+		return false
+	}
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(pw)) == nil
 }
 
 // dummyHash is compared against when a login does not exist, so response
-// time does not reveal which logins are valid.
-var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("rampart-dummy-password"), bcrypt.DefaultCost)
+// time does not reveal which logins are valid. It is built lazily at the
+// current bcrypt cost.
+var dummyHash = sync.OnceValue(func() string {
+	h, _ := bcrypt.GenerateFromPassword([]byte("rampart-dummy-password"), bcryptCost)
+	return string(h)
+})

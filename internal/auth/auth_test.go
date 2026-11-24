@@ -2,9 +2,13 @@ package auth
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +24,8 @@ var t0 = time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 type fakeStore struct {
 	users    map[string]store.User
 	sessions map[string]sess
+
+	expiredCalls int
 }
 
 type sess struct {
@@ -59,6 +65,11 @@ func (f *fakeStore) SessionUserAt(_ context.Context, h []byte, now time.Time) (s
 		}
 	}
 	return store.User{}, store.ErrUserNotFound
+}
+
+func (f *fakeStore) DeleteExpiredSessions(context.Context) (int64, error) {
+	f.expiredCalls++
+	return 0, nil
 }
 
 func (f *fakeStore) DeleteSession(_ context.Context, h []byte) error {
@@ -251,7 +262,7 @@ func TestMustChangePasswordRedirects(t *testing.T) {
 	h := handlerChain(f, func() time.Time { return t0 })
 	tok := loginAs(t, f, "adm", "password-1")
 
-	for _, p := range []string{"/", "/targets", "/api/targets", "/annotations", "/staticx/app.css"} {
+	for _, p := range []string{"/", "/targets", "/annotations", "/staticx/app.css"} {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, reqWithCookie("GET", p, tok))
 		assert.Equal(t, http.StatusSeeOther, rec.Code, p)
@@ -304,4 +315,148 @@ func TestCSRFRejectsMissingToken(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestConcurrentLoginsRespectLockout(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	var checks atomic.Int32
+	a.check = func(hash, pw string) bool {
+		checks.Add(1)
+		time.Sleep(5 * time.Millisecond) // widen the race window
+		return CheckPassword(hash, pw)
+	}
+	var wg sync.WaitGroup
+	var locked atomic.Int32
+	for range 20 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _, err := a.Login(context.Background(), "ann", "wrong-password", "10.0.0.1")
+			if errors.Is(err, ErrLocked) {
+				locked.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	assert.Equal(t, int32(MaxLoginFailures), checks.Load())
+	assert.Equal(t, int32(20-MaxLoginFailures), locked.Load())
+}
+
+func TestLockedErrorCarriesWait(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	now := t0
+	a := NewAuthenticator(f, f, func() time.Time { return now })
+	for range MaxLoginFailures {
+		_, _, _ = a.Login(context.Background(), "ann", "wrong-password", "10.0.0.1")
+	}
+	now = t0.Add(5 * time.Minute)
+	_, _, err := a.Login(context.Background(), "ann", "right-password", "10.0.0.1")
+	assert.ErrorIs(t, ErrLocked, err)
+	var le *LockedError
+	assert.True(t, errors.As(err, &le))
+	assert.Equal(t, LoginFailureWindow-5*time.Minute, le.Wait)
+}
+
+func TestSuccessfulLoginsDoNotFillClientKey(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	for range 3 * MaxLoginFailures {
+		_, _, err := a.Login(context.Background(), "ann", "right-password", "10.0.0.1")
+		assert.NoError(t, err)
+	}
+}
+
+func TestLoginPurgesExpiredSessions(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	loginAs(t, f, "ann", "right-password")
+	assert.Equal(t, 1, f.expiredCalls)
+}
+
+func TestOverlongLoginRejectedWithoutKeying(t *testing.T) {
+	f := newFake()
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	_, _, err := a.Login(context.Background(), strings.Repeat("a", MaxLoginLen+1), "whatever-pw", "10.0.0.1")
+	assert.ErrorIs(t, ErrBadCredentials, err)
+	assert.Len(t, 0, a.throttle.failures)
+}
+
+func TestIPv6ClientsKeyedPerSlash64(t *testing.T) {
+	assert.Equal(t, clientKey("2001:db8:1:2::1"), clientKey("2001:db8:1:2:ffff::9"))
+	assert.NotEqual(t, clientKey("2001:db8:1:2::1"), clientKey("2001:db8:1:3::1"))
+	assert.Equal(t, "10.0.0.1", clientKey("::ffff:10.0.0.1"))
+
+	f := newFake()
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	for i := range MaxLoginFailures {
+		ip := fmt.Sprintf("2001:db8:1:2::%x", i+1)
+		_, _, err := a.Login(context.Background(), fmt.Sprintf("u%d", i), "whatever-pw", ip)
+		assert.ErrorIs(t, ErrBadCredentials, err)
+	}
+	_, _, err := a.Login(context.Background(), "fresh", "whatever-pw", "2001:db8:1:2::ffff")
+	assert.ErrorIs(t, ErrLocked, err)
+}
+
+func TestThrottleKeyCapIsHard(t *testing.T) {
+	now := t0
+	th := newThrottle(func() time.Time { return now })
+	for i := range maxThrottleKeys + 500 {
+		now = now.Add(time.Millisecond)
+		ok, _ := th.reserve(fmt.Sprintf("k%d", i))
+		assert.True(t, ok)
+		assert.True(t, len(th.failures) <= maxThrottleKeys)
+	}
+	assert.Equal(t, maxThrottleKeys, len(th.failures))
+	_, oldest := th.failures["k0"]
+	assert.False(t, oldest)
+	_, newest := th.failures[fmt.Sprintf("k%d", maxThrottleKeys+499)]
+	assert.True(t, newest)
+}
+
+func TestCheckPasswordRejectsOverlong(t *testing.T) {
+	long := strings.Repeat("a", 73)
+	h, _ := HashPassword(strings.Repeat("a", 72))
+	assert.False(t, CheckPassword(h, long)) // bcrypt would truncate and match
+}
+
+func TestMustChangePasswordAPIRequest(t *testing.T) {
+	f := newFake(mkUser(1, "adm", RoleAdmin, "password-1", true))
+	h := handlerChain(f, func() time.Time { return t0 })
+	tok := loginAs(t, f, "adm", "password-1")
+	r := reqWithCookie("POST", "/api/targets", tok)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Equal(t, "/account/password", rec.Header().Get("HX-Redirect"))
+
+	r = reqWithCookie("GET", "/targets", tok)
+	r.Header.Set("HX-Request", "true")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestPasswordErrorsSayBytes(t *testing.T) {
+	assert.Contain(t, "bytes", ErrWeakPassword.Error())
+	assert.Contain(t, "bytes", ErrLongPassword.Error())
+}
+
+func TestCSRFMoreCases(t *testing.T) {
+	h := CSRF(okHandler())
+	do := func(method string, hdr map[string]string) int {
+		r := httptest.NewRequest(method, "http://rampart.local/x", nil)
+		for k, v := range hdr {
+			r.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	assert.Equal(t, http.StatusForbidden, do("POST", map[string]string{"Origin": "null"}))
+	assert.Equal(t, http.StatusForbidden, do("POST", map[string]string{"Sec-Fetch-Site": "same-site"}))
+	assert.Equal(t, http.StatusForbidden, do("PUT", map[string]string{"Sec-Fetch-Site": "cross-site"}))
+	assert.Equal(t, http.StatusForbidden, do("DELETE", map[string]string{"Sec-Fetch-Site": "cross-site"}))
+	// No Sec-Fetch-Site: Origin host is compared with Host.
+	assert.Equal(t, http.StatusOK, do("POST", map[string]string{"Origin": "http://rampart.local"}))
+	assert.Equal(t, http.StatusForbidden, do("POST", map[string]string{"Origin": "http://other.local"}))
 }

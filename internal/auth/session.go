@@ -35,6 +35,16 @@ var (
 	ErrLocked = errors.New("too many failed logins")
 )
 
+// LockedError is returned while a login or client is throttled; Wait is how
+// long until another attempt is allowed (for Retry-After). It matches
+// ErrLocked with errors.Is.
+type LockedError struct{ Wait time.Duration }
+
+func (e *LockedError) Error() string { return ErrLocked.Error() }
+
+// Is reports whether target is ErrLocked.
+func (e *LockedError) Is(target error) bool { return target == ErrLocked }
+
 // SessionStore is what the middleware needs from storage; *store.Store
 // satisfies it.
 type SessionStore interface {
@@ -43,6 +53,7 @@ type SessionStore interface {
 	// store.ErrUserNotFound.
 	SessionUserAt(ctx context.Context, tokenHash []byte, now time.Time) (store.User, error)
 	DeleteSession(ctx context.Context, tokenHash []byte) error
+	DeleteExpiredSessions(ctx context.Context) (int64, error)
 }
 
 // UserStore looks users up by login for Login; *store.Store satisfies it.
@@ -78,39 +89,49 @@ type Authenticator struct {
 	Sessions SessionStore
 	now      func() time.Time
 	throttle *throttle
+	check    func(hash, pw string) bool
 }
 
 // NewAuthenticator returns an Authenticator using now as its clock.
 func NewAuthenticator(users UserStore, sessions SessionStore, now func() time.Time) *Authenticator {
-	return &Authenticator{Users: users, Sessions: sessions, now: now, throttle: newThrottle(now)}
+	return &Authenticator{Users: users, Sessions: sessions, now: now, throttle: newThrottle(now), check: CheckPassword}
 }
 
 // Login checks the credentials and creates a session. ip is the client
 // address used for throttling. It returns the cookie token and expiry.
 // Errors: ErrLocked, ErrBadCredentials, or a storage error.
 func (a *Authenticator) Login(ctx context.Context, login, password, ip string) (string, time.Time, error) {
+	if len(login) > MaxLoginLen {
+		return "", time.Time{}, ErrBadCredentials
+	}
 	keys := throttleKeys(login, ip)
-	if blocked, _ := a.throttle.blocked(keys...); blocked {
-		return "", time.Time{}, ErrLocked
+	// The attempt is counted before verification so concurrent guesses
+	// cannot all pass the limit check.
+	reservedAt := a.now()
+	if ok, wait := a.throttle.reserve(keys...); !ok {
+		return "", time.Time{}, &LockedError{Wait: wait}
 	}
 	u, err := a.Users.UserByLogin(ctx, login)
 	switch {
 	case errors.Is(err, store.ErrUserNotFound):
-		CheckPassword(string(dummyHash), password) // equalise timing
-		a.throttle.fail(keys...)
+		a.check(dummyHash(), password) // equalise timing
 		return "", time.Time{}, ErrBadCredentials
 	case err != nil:
+		a.throttle.release(keys[0], keys[1], reservedAt)
 		return "", time.Time{}, err
 	}
-	if !CheckPassword(u.PasswordHash, password) {
-		a.throttle.fail(keys...)
+	if !a.check(u.PasswordHash, password) {
 		return "", time.Time{}, ErrBadCredentials
 	}
-	a.throttle.reset(keys[0])
 	tok := newToken()
 	expires := a.now().Add(SessionTTL)
 	if err := a.Sessions.CreateSession(ctx, HashToken(tok), u.ID, expires); err != nil {
+		a.throttle.release(keys[0], keys[1], reservedAt)
 		return "", time.Time{}, err
+	}
+	a.throttle.release(keys[0], keys[1], reservedAt)
+	if _, err := a.Sessions.DeleteExpiredSessions(ctx); err != nil {
+		slog.Error("delete expired sessions", "err", err)
 	}
 	return tok, expires, nil
 }
@@ -171,6 +192,11 @@ func Middleware(st SessionStore, now func() time.Time) func(http.Handler) http.H
 			}
 			u := fromStore(su)
 			if u.MustChangePassword && !passwordChangeExempt(r.URL.Path) {
+				if IsAPIRequest(r) {
+					w.Header().Set("HX-Redirect", PasswordPath)
+					http.Error(w, "password change required", http.StatusForbidden)
+					return
+				}
 				http.Redirect(w, r, PasswordPath, http.StatusSeeOther)
 				return
 			}
