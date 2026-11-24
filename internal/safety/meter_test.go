@@ -601,3 +601,15 @@ func TestPathProbeSignatureCountUnknown(t *testing.T) {
 	m.SetPathSignatures(2)
 	assert.Equal(t, StatusUnmeasured, checkByName(t, BuildReport(m.Receipt(nil)), "path probe budget").Status)
 }
+
+// A zone never makes a second host out of one address: the budget and the
+// stored per-host counts use the bare address.
+func TestProbeGateStripsZone(t *testing.T) {
+	m := NewMeter()
+	m.SetBudget(Budget{PathProbesPerHost: 1})
+
+	assert.True(t, m.ProbeGate(netip.MustParseAddr("fe80::1%eth0")))
+	assert.False(t, m.ProbeGate(netip.MustParseAddr("fe80::1")))
+	assert.False(t, m.ProbeGate(netip.MustParseAddr("fe80::1%eth1")))
+	assert.Equal(t, map[string]int{"fe80::1": 1}, m.Drain(nil).ProbeHosts)
+}

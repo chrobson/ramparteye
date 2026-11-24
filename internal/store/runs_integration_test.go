@@ -66,16 +66,16 @@ func TestRunLifecycle(t *testing.T) {
 			assert.NoError(t, s.CompleteChunk(ctx, c, 1500*time.Millisecond, hosts, svcs))
 			assert.NoError(t, s.InsertObservations(ctx, runID, hosts, svcs)) // idempotent
 		case "10.20.1.0/24":
-			assert.NoError(t, s.ReleaseChunk(ctx, c.ID, "interrupted"))
+			assert.NoError(t, s.ReleaseChunk(ctx, c, "interrupted"))
 			c2, ok, _ := s.LeaseChunk(ctx, runID)
 			assert.True(t, ok)
 			assert.Equal(t, c.ID, c2.ID)
 			// An interruption refunds the lease's attempt.
-			assert.NoError(t, s.InterruptChunk(ctx, c.ID, "window ended"))
+			assert.NoError(t, s.InterruptChunk(ctx, c2, "window ended"))
 			c3, ok, _ := s.LeaseChunk(ctx, runID)
 			assert.True(t, ok)
 			assert.Equal(t, c2.Attempts, c3.Attempts)
-			assert.NoError(t, s.FailChunk(ctx, c.ID, "nmap exit 1"))
+			assert.NoError(t, s.FailChunk(ctx, c3, "nmap exit 1"))
 		default:
 			assert.NoError(t, s.CompleteChunk(ctx, c, time.Second, []model.HostObs{{IP: c.Prefix.Addr()}}, nil))
 		}

@@ -198,7 +198,7 @@ func (m *Meter) SeedProbes(counts map[netip.Addr]int) {
 	}
 	m.mu.Lock()
 	for h, n := range counts {
-		m.base[h.Unmap()] += n
+		m.base[h.Unmap().WithZone("")] += n
 	}
 	m.mu.Unlock()
 }
@@ -334,12 +334,13 @@ func carriesAuth(h http.Header) bool {
 
 // ProbeGate decides whether one more path probe may be sent to host and
 // counts it. It matches sig.Engine.ProbeGate. A probe over the per-host
-// budget is refused and counted as refused. A nil meter allows everything.
+// budget is refused and counted as refused. The host is counted unmapped
+// and without zone. A nil meter allows everything.
 func (m *Meter) ProbeGate(host netip.Addr) bool {
 	if m == nil {
 		return true
 	}
-	host = host.Unmap()
+	host = host.Unmap().WithZone("")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.cur.gateCalls++

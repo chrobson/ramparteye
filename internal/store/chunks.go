@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/chrobson/ramparteye/internal/model"
 )
@@ -54,8 +55,29 @@ func (s *Store) LeaseChunk(ctx context.Context, runID int64) (Chunk, bool, error
 	return c, true, nil
 }
 
+// ErrLeaseLost is returned when a chunk is no longer leased by the caller:
+// it was reset and leased again (its attempts moved on), or it is not
+// running any more. The caller must drop its result.
+var ErrLeaseLost = errors.New("chunk lease lost")
+
+// leaseGuard matches the row of chunk c only while c's lease is current:
+// attempts acts as the lease token, so a stale worker cannot complete or
+// requeue a chunk that was re-leased to another worker.
+const leaseGuard = ` WHERE id = $1 AND status = 'running' AND attempts = $2`
+
+func leaseResult(tag pgconn.CommandTag, err error) error {
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
 // CompleteChunk stores the observations of a chunk and marks it done in one
-// transaction; the number of hosts up is recorded on the chunk.
+// transaction; the number of hosts up is recorded on the chunk. Nothing is
+// stored and ErrLeaseLost is returned when c's lease is no longer current.
 func (s *Store) CompleteChunk(ctx context.Context, c Chunk, dur time.Duration, hosts []model.HostObs, svcs []model.ServiceObs) error {
 	up := 0
 	for _, h := range hosts {
@@ -64,35 +86,32 @@ func (s *Store) CompleteChunk(ctx context.Context, c Chunk, dur time.Duration, h
 		}
 	}
 	return s.InTx(ctx, func(tx *Store) error {
-		if err := tx.InsertObservations(ctx, c.RunID, hosts, svcs); err != nil {
+		err := leaseResult(tx.db.Exec(ctx, `UPDATE scan_chunks SET status = 'done', duration_ms = $3, hosts_up = $4,
+			last_error = ''`+leaseGuard, c.ID, c.Attempts, dur.Milliseconds(), up))
+		if err != nil {
 			return err
 		}
-		_, err := tx.db.Exec(ctx, `UPDATE scan_chunks SET status = 'done', duration_ms = $2, hosts_up = $3,
-			last_error = '' WHERE id = $1`, c.ID, dur.Milliseconds(), up)
-		return err
+		return tx.InsertObservations(ctx, c.RunID, hosts, svcs)
 	})
 }
 
 // ReleaseChunk returns a chunk to pending after a retryable error.
-func (s *Store) ReleaseChunk(ctx context.Context, chunkID int64, reason string) error {
-	_, err := s.db.Exec(ctx, `UPDATE scan_chunks SET status = 'pending', last_error = $2 WHERE id = $1`,
-		chunkID, reason)
-	return err
+func (s *Store) ReleaseChunk(ctx context.Context, c Chunk, reason string) error {
+	return leaseResult(s.db.Exec(ctx, `UPDATE scan_chunks SET status = 'pending', last_error = $3`+leaseGuard,
+		c.ID, c.Attempts, reason))
 }
 
 // InterruptChunk returns a chunk to pending after an interruption (window
 // end, stop, shutdown) and refunds the attempt its lease took.
-func (s *Store) InterruptChunk(ctx context.Context, chunkID int64, reason string) error {
-	_, err := s.db.Exec(ctx, `UPDATE scan_chunks SET status = 'pending', last_error = $2,
-		attempts = greatest(attempts - 1, 0) WHERE id = $1`, chunkID, reason)
-	return err
+func (s *Store) InterruptChunk(ctx context.Context, c Chunk, reason string) error {
+	return leaseResult(s.db.Exec(ctx, `UPDATE scan_chunks SET status = 'pending', last_error = $3,
+		attempts = greatest(attempts - 1, 0)`+leaseGuard, c.ID, c.Attempts, reason))
 }
 
 // FailChunk marks a chunk permanently failed.
-func (s *Store) FailChunk(ctx context.Context, chunkID int64, reason string) error {
-	_, err := s.db.Exec(ctx, `UPDATE scan_chunks SET status = 'failed', last_error = $2 WHERE id = $1`,
-		chunkID, reason)
-	return err
+func (s *Store) FailChunk(ctx context.Context, c Chunk, reason string) error {
+	return leaseResult(s.db.Exec(ctx, `UPDATE scan_chunks SET status = 'failed', last_error = $3`+leaseGuard,
+		c.ID, c.Attempts, reason))
 }
 
 // CountChunks counts the chunks of a run per status.

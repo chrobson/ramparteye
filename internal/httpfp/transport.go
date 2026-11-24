@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+
+	"github.com/chrobson/ramparteye/internal/safety"
 )
 
 // target describes where requests for one endpoint go.
@@ -52,7 +54,9 @@ func (p *HTTPProber) client(t target, tlsCfg *tls.Config) *http.Client {
 		MaxResponseHeaderBytes: 64 << 10,
 	}
 	return &http.Client{
-		Transport: guard{tr},
+		// Requests are counted in the safety meter of their context (if any)
+		// after the method guard, i.e. only what is actually sent.
+		Transport: guard{safety.Transport(tr)},
 		Timeout:   p.opt.Timeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse

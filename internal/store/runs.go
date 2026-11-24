@@ -178,6 +178,12 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, status string, activ
 // ResetRunning is called on startup: chunks left running by a crashed
 // process go back to pending and their runs become paused so the scheduler
 // resumes them. It returns the number of chunks reset.
+//
+// It is global and assumes a single scanning process per database: it must
+// run only when no other process executes scans (`serve` calls it once at
+// startup). If that assumption is broken, the lease guard of the chunk
+// methods keeps it safe: a worker whose chunk was reset and leased again gets
+// ErrLeaseLost and its result is dropped.
 func (s *Store) ResetRunning(ctx context.Context) (int64, error) {
 	var n int64
 	err := s.InTx(ctx, func(tx *Store) error {
