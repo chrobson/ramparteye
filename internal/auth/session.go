@@ -98,7 +98,7 @@ func NewAuthenticator(users UserStore, sessions SessionStore, now func() time.Ti
 }
 
 // Login checks the credentials and creates a session. ip is the client
-// address used for throttling. It returns the cookie token and expiry.
+// address used for throttling; it must be the bare host without a port. It returns the cookie token and expiry.
 // Errors: ErrLocked, ErrBadCredentials, or a storage error.
 func (a *Authenticator) Login(ctx context.Context, login, password, ip string) (string, time.Time, error) {
 	if len(login) > MaxLoginLen {
@@ -107,8 +107,8 @@ func (a *Authenticator) Login(ctx context.Context, login, password, ip string) (
 	keys := throttleKeys(login, ip)
 	// The attempt is counted before verification so concurrent guesses
 	// cannot all pass the limit check.
-	reservedAt := a.now()
-	if ok, wait := a.throttle.reserve(keys...); !ok {
+	res, ok, wait := a.throttle.reserve(keys...)
+	if !ok {
 		return "", time.Time{}, &LockedError{Wait: wait}
 	}
 	u, err := a.Users.UserByLogin(ctx, login)
@@ -117,7 +117,7 @@ func (a *Authenticator) Login(ctx context.Context, login, password, ip string) (
 		a.check(dummyHash(), password) // equalise timing
 		return "", time.Time{}, ErrBadCredentials
 	case err != nil:
-		a.throttle.release(keys[0], keys[1], reservedAt)
+		a.throttle.release(res, false)
 		return "", time.Time{}, err
 	}
 	if !a.check(u.PasswordHash, password) {
@@ -126,10 +126,10 @@ func (a *Authenticator) Login(ctx context.Context, login, password, ip string) (
 	tok := newToken()
 	expires := a.now().Add(SessionTTL)
 	if err := a.Sessions.CreateSession(ctx, HashToken(tok), u.ID, expires); err != nil {
-		a.throttle.release(keys[0], keys[1], reservedAt)
+		a.throttle.release(res, false)
 		return "", time.Time{}, err
 	}
-	a.throttle.release(keys[0], keys[1], reservedAt)
+	a.throttle.release(res, true)
 	if _, err := a.Sessions.DeleteExpiredSessions(ctx); err != nil {
 		slog.Error("delete expired sessions", "err", err)
 	}

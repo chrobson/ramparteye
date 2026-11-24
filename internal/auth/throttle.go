@@ -2,6 +2,7 @@ package auth
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,10 +20,13 @@ type throttle struct {
 	mu       sync.Mutex
 	failures map[string][]time.Time
 	now      func() time.Time
+
+	lastSweep time.Time
+	maxKeys   int
 }
 
 func newThrottle(now func() time.Time) *throttle {
-	return &throttle{failures: map[string][]time.Time{}, now: now}
+	return &throttle{failures: map[string][]time.Time{}, now: now, maxKeys: maxThrottleKeys}
 }
 
 // MaxLoginLen is the longest login that is keyed; longer ones are rejected.
@@ -67,11 +71,18 @@ func (t *throttle) prune(key string, now time.Time) []time.Time {
 	return fs
 }
 
+// reservation is one counted attempt; release removes exactly it.
+type reservation struct {
+	keys []string
+	at   time.Time
+}
+
 // reserve atomically checks the limit and, when not exceeded, counts one
 // attempt against every key before the password is verified. Concurrent
-// attempts therefore cannot all slip under the limit. On a successful login
-// call release. When blocked it returns the remaining wait.
-func (t *throttle) reserve(keys ...string) (ok bool, wait time.Duration) {
+// attempts therefore cannot all slip under the limit. When blocked it
+// returns the remaining wait. If the key table is full of blocked keys the
+// request is refused as well (fail closed) rather than evicting a lock.
+func (t *throttle) reserve(keys ...string) (res reservation, ok bool, wait time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
@@ -83,52 +94,75 @@ func (t *throttle) reserve(keys ...string) (ok bool, wait time.Duration) {
 		}
 	}
 	if wait > 0 {
-		return false, wait
+		return reservation{}, false, wait
 	}
 	for _, k := range keys {
-		if _, known := t.failures[k]; !known && len(t.failures) >= maxThrottleKeys {
-			t.makeRoom(now)
+		if _, known := t.failures[k]; !known {
+			if !t.makeRoom(now, keys) {
+				return reservation{}, false, LoginFailureWindow
+			}
 		}
 		t.failures[k] = append(t.failures[k], now)
 	}
-	return true, 0
+	return reservation{keys: keys, at: now}, true, 0
 }
 
-// makeRoom frees at least one slot: expired keys first, then the key whose
-// newest failure is oldest. Caller holds mu.
-func (t *throttle) makeRoom(now time.Time) {
-	for k := range t.failures {
-		t.prune(k, now)
+// makeRoom ensures a free slot when the table is full: expired keys go
+// first, then the non-blocked key with the fewest failures (oldest on
+// ties). Blocked keys and the request's own keys are never evicted; it
+// reports false when no slot can be freed. Caller holds mu.
+func (t *throttle) makeRoom(now time.Time, own []string) bool {
+	if len(t.failures) < t.maxKeys {
+		return true
 	}
-	if len(t.failures) < maxThrottleKeys {
-		return
-	}
-	var oldest string
-	var oldestAt time.Time
-	for k, fs := range t.failures {
-		if last := fs[len(fs)-1]; oldest == "" || last.Before(oldestAt) {
-			oldest, oldestAt = k, last
+	if now.Sub(t.lastSweep) >= time.Minute { // full sweeps are O(n); rate-limit them
+		t.lastSweep = now
+		for k := range t.failures {
+			t.prune(k, now)
+		}
+		if len(t.failures) < t.maxKeys {
+			return true
 		}
 	}
-	delete(t.failures, oldest)
+	var victim string
+	var victimFS []time.Time
+	for k, fs := range t.failures {
+		if len(fs) >= MaxLoginFailures || slices.Contains(own, k) {
+			continue
+		}
+		if victim == "" || len(fs) < len(victimFS) ||
+			(len(fs) == len(victimFS) && fs[len(fs)-1].Before(victimFS[len(victimFS)-1])) {
+			victim, victimFS = k, fs
+		}
+	}
+	if victim == "" {
+		return false
+	}
+	delete(t.failures, victim)
+	return true
 }
 
-// release undoes a reservation after a successful login: the login key is
-// cleared and the client key loses the one attempt reserved at reservedAt.
-func (t *throttle) release(loginKey, clientKey string, reservedAt time.Time) {
+// release removes the attempt counted by res from every key. When success
+// is true (correct password) the login key is cleared as well; error paths
+// leave earlier real failures alone.
+func (t *throttle) release(res reservation, success bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.failures, loginKey)
-	fs := t.failures[clientKey]
-	for i, f := range fs {
-		if f.Equal(reservedAt) {
-			fs = append(fs[:i:i], fs[i+1:]...)
-			break
+	for _, k := range res.keys {
+		fs := t.failures[k]
+		for i, f := range fs {
+			if f.Equal(res.at) {
+				fs = append(fs[:i:i], fs[i+1:]...)
+				break
+			}
+		}
+		if len(fs) == 0 {
+			delete(t.failures, k)
+		} else {
+			t.failures[k] = fs
 		}
 	}
-	if len(fs) == 0 {
-		delete(t.failures, clientKey)
-	} else {
-		t.failures[clientKey] = fs
+	if success && len(res.keys) > 0 {
+		delete(t.failures, res.keys[0])
 	}
 }

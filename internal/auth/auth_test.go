@@ -402,7 +402,7 @@ func TestThrottleKeyCapIsHard(t *testing.T) {
 	th := newThrottle(func() time.Time { return now })
 	for i := range maxThrottleKeys + 500 {
 		now = now.Add(time.Millisecond)
-		ok, _ := th.reserve(fmt.Sprintf("k%d", i))
+		_, ok, _ := th.reserve(fmt.Sprintf("k%d", i))
 		assert.True(t, ok)
 		assert.True(t, len(th.failures) <= maxThrottleKeys)
 	}
@@ -459,4 +459,64 @@ func TestCSRFMoreCases(t *testing.T) {
 	// No Sec-Fetch-Site: Origin host is compared with Host.
 	assert.Equal(t, http.StatusOK, do("POST", map[string]string{"Origin": "http://rampart.local"}))
 	assert.Equal(t, http.StatusForbidden, do("POST", map[string]string{"Origin": "http://other.local"}))
+}
+
+func TestRealClockSuccessfulLoginsAreReleased(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	var n int64
+	clock := func() time.Time { n++; return t0.Add(time.Duration(n) * time.Microsecond) }
+	a := NewAuthenticator(f, f, clock)
+	for range 10 {
+		_, _, err := a.Login(context.Background(), "ann", "right-password", "10.0.0.1")
+		assert.NoError(t, err)
+	}
+	b := NewAuthenticator(f, f, time.Now)
+	for range 10 {
+		_, _, err := b.Login(context.Background(), "ann", "right-password", "10.0.0.2")
+		assert.NoError(t, err)
+	}
+}
+
+type errUsers struct{ err error }
+
+func (e errUsers) UserByLogin(context.Context, string) (store.User, error) {
+	return store.User{}, e.err
+}
+
+func TestStoreErrorKeepsEarlierFailures(t *testing.T) {
+	f := newFake(mkUser(1, "ann", RoleAnalyst, "right-password", false))
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	for range MaxLoginFailures - 1 {
+		_, _, err := a.Login(context.Background(), "ann", "wrong-password", "10.0.0.1")
+		assert.ErrorIs(t, ErrBadCredentials, err)
+	}
+	a.Users = errUsers{errors.New("db down")}
+	_, _, err := a.Login(context.Background(), "ann", "wrong-password", "10.0.0.1")
+	assert.Error(t, err)
+	assert.False(t, errors.Is(err, ErrLocked))
+
+	a.Users = f
+	_, _, err = a.Login(context.Background(), "ann", "wrong-password", "10.0.0.1")
+	assert.ErrorIs(t, ErrBadCredentials, err) // 5th failure counted
+	_, _, err = a.Login(context.Background(), "ann", "right-password", "10.0.0.1")
+	assert.ErrorIs(t, ErrLocked, err)
+}
+
+func TestFloodCannotEvictLock(t *testing.T) {
+	f := newFake(mkUser(1, "admin", RoleAdmin, "right-password", false))
+	a := NewAuthenticator(f, f, func() time.Time { return t0 })
+	a.throttle.maxKeys = 300 // same logic as the 10,000 default, faster to flood
+	ctx := context.Background()
+	for range MaxLoginFailures {
+		_, _, _ = a.Login(ctx, "admin", "wrong-password", "10.0.0.1")
+	}
+	for i := range 1000 {
+		ip := fmt.Sprintf("2001:db8:%x:%x::1", i>>16, i&0xffff)
+		_, _, _ = a.Login(ctx, fmt.Sprintf("junk%d", i), "whatever-pw", ip)
+	}
+	_, _, err := a.Login(ctx, "admin", "right-password", "10.0.0.7")
+	assert.ErrorIs(t, ErrLocked, err)
+	_, _, err = a.Login(ctx, "admin", "wrong-password", "10.0.0.8")
+	assert.ErrorIs(t, ErrLocked, err)
+	assert.True(t, len(a.throttle.failures) <= 300)
 }
