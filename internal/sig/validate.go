@@ -63,6 +63,10 @@ func (e *ValidationError) Error() string {
 // Unwrap returns the individual problems.
 func (e *ValidationError) Unwrap() []error { return e.Problems }
 
+// ReservedIDs are signature ids that would collide with the UI routes
+// /signatures/{import,new,backtest}.
+var ReservedIDs = []string{"import", "new", "backtest"}
+
 // Validate checks the safety rules and returns every problem found (nil
 // when the signature is valid). As a side effect it compiles the regular
 // expressions and defaults path probe methods to GET, so a signature must
@@ -71,8 +75,11 @@ func Validate(s *Signature) []error {
 	var p []error
 	add := func(f string, a ...any) { p = append(p, fmt.Errorf(f, a...)) }
 
-	if !idRe.MatchString(s.ID) {
+	switch {
+	case !idRe.MatchString(s.ID):
 		add("id must match %s", idRe)
+	case slices.Contains(ReservedIDs, s.ID):
+		add("id %s is reserved (it names a page of the signatures UI)", s.ID)
 	}
 	if strings.TrimSpace(s.Name) == "" || len(s.Name) > 128 {
 		add("name is required (max 128 chars)")

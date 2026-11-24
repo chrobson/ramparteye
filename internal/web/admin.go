@@ -222,6 +222,7 @@ func (s *Server) targetUser(w http.ResponseWriter, r *http.Request, what string)
 }
 
 func (s *Server) userRole(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	u, ok := s.targetUser(w, r, "change the role of")
 	if !ok {
 		return
@@ -236,6 +237,10 @@ func (s *Server) userRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.d.Store.SetUserRole(r.Context(), u.ID, role.ID); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			s.lastAdminConflict(w, r, "demote")
+			return
+		}
 		s.log.Error("set user role", "err", err)
 		s.serverError(w, r)
 		return
@@ -245,6 +250,14 @@ func (s *Server) userRole(w http.ResponseWriter, r *http.Request) {
 		"new_role": role.Name})
 	setFlash(w, r, "Role of "+u.Login+" changed to "+role.Name+".")
 	http.Redirect(w, r, "/settings/users", http.StatusSeeOther)
+}
+
+// lastAdminConflict is the 409 page for a change the store refused because
+// it would leave no active Admin.
+func (s *Server) lastAdminConflict(w http.ResponseWriter, r *http.Request, verb string) {
+	s.renderError(w, r, errorData{Code: http.StatusConflict, Title: "Last Admin",
+		Text: "You cannot " + verb + " the last active Admin: RampartEye needs at least one. " +
+			"Give another user the Admin role first."})
 }
 
 // canManage reports whether the acting user holds every permission of u,
@@ -264,6 +277,7 @@ func (s *Server) userDisable(w http.ResponseWriter, r *http.Request) { s.setDisa
 func (s *Server) userEnable(w http.ResponseWriter, r *http.Request) { s.setDisabled(w, r, false) }
 
 func (s *Server) setDisabled(w http.ResponseWriter, r *http.Request, disabled bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	verb, action := "enable", "user.enable"
 	if disabled {
 		verb, action = "disable", "user.disable"
@@ -279,6 +293,10 @@ func (s *Server) setDisabled(w http.ResponseWriter, r *http.Request, disabled bo
 	}
 	ctx := r.Context()
 	if err := s.d.Store.SetUserDisabled(ctx, u.ID, disabled); err != nil {
+		if errors.Is(err, store.ErrLastAdmin) {
+			s.lastAdminConflict(w, r, "disable")
+			return
+		}
 		s.log.Error("set user disabled", "err", err)
 		s.serverError(w, r)
 		return
@@ -365,10 +383,31 @@ func (s *Server) checkRole(r *http.Request, name string, perms []string) string 
 }
 
 func (s *Server) roleDelete(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		s.notFound(w, r)
 		return
+	}
+	roles, err := s.d.Store.Roles(r.Context())
+	if err != nil {
+		s.log.Error("roles", "err", err)
+		s.serverError(w, r)
+		return
+	}
+	for _, ro := range roles {
+		if ro.ID != id || ro.Builtin {
+			continue
+		}
+		// Deleting a role needs the same standing as granting it.
+		if _, msg := s.grantable(r, ro.Name); msg != "" {
+			if _, why, ok := strings.Cut(msg, ": "); ok {
+				msg = "You cannot delete the role " + ro.Name + ": " + why
+			}
+			setFlash(w, r, msg)
+			http.Redirect(w, r, "/settings/users", http.StatusSeeOther)
+			return
+		}
 	}
 	name, err := s.d.Store.DeleteRole(r.Context(), id)
 	msg := "Role " + name + " deleted."

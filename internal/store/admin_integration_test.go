@@ -79,3 +79,44 @@ func TestBacktestHistory(t *testing.T) {
 
 	assert.Len(t, 3, must.Value(s.BacktestHistory(ctx, 5)))
 }
+
+func TestLastAdminGuard(t *testing.T) {
+	s, _ := newStore(t)
+	root := must.Value(s.CreateUser(ctx, model.NewUser{Login: "root", PasswordHash: "h", Role: "Admin"}))
+	viewer := must.Value(s.RoleIDByName(ctx, "Viewer"))
+	admin := must.Value(s.RoleIDByName(ctx, "Admin"))
+
+	assert.ErrorIs(t, store.ErrLastAdmin, s.SetUserRole(ctx, root, viewer))
+	assert.ErrorIs(t, store.ErrLastAdmin, s.SetUserDisabled(ctx, root, true))
+	assert.NoError(t, s.SetUserRole(ctx, root, admin)) // staying Admin is fine
+	assert.Equal(t, "Admin", must.Value(s.UserByID(ctx, root)).RoleName)
+
+	second := must.Value(s.CreateUser(ctx, model.NewUser{Login: "second", PasswordHash: "h", Role: "Admin"}))
+	assert.NoError(t, s.SetUserDisabled(ctx, root, true))
+	assert.ErrorIs(t, store.ErrLastAdmin, s.SetUserRole(ctx, second, viewer)) // root is disabled
+	assert.NoError(t, s.SetUserDisabled(ctx, root, false))
+	assert.NoError(t, s.SetUserRole(ctx, second, viewer))
+	assert.False(t, must.Value(s.UserByID(ctx, root)).Disabled)
+}
+
+func TestLastAdminGuardConcurrent(t *testing.T) {
+	s, _ := newStore(t)
+	a := must.Value(s.CreateUser(ctx, model.NewUser{Login: "a", PasswordHash: "h", Role: "Admin"}))
+	b := must.Value(s.CreateUser(ctx, model.NewUser{Login: "b", PasswordHash: "h", Role: "Admin"}))
+	viewer := must.Value(s.RoleIDByName(ctx, "Viewer"))
+
+	errs := make(chan error, 2)
+	for _, id := range []int64{a, b} {
+		go func() { errs <- s.SetUserRole(ctx, id, viewer) }()
+	}
+	e1, e2 := <-errs, <-errs
+
+	assert.True(t, (e1 == nil) != (e2 == nil))
+	admins := 0
+	for _, u := range must.Value(s.Users(ctx)) {
+		if u.RoleName == "Admin" {
+			admins++
+		}
+	}
+	assert.Equal(t, 1, admins)
+}

@@ -35,8 +35,9 @@ func (s *Store) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	return err
 }
 
-// DeleteUserSessions removes every session of a user (role or password
-// change).
+// DeleteUserSessions removes every session of a user (password change,
+// account disabled). A role change needs none: sessions read the role's
+// permissions on every request.
 func (s *Store) DeleteUserSessions(ctx context.Context, userID int64) error {
 	_, err := s.db.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1`, userID)
 	return err

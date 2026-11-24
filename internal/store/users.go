@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -22,6 +23,8 @@ var (
 	ErrRoleInUse = errors.New("role is assigned to users")
 	// ErrRoleBuiltin is returned when deleting a built-in role.
 	ErrRoleBuiltin = errors.New("built-in role cannot be deleted")
+	// ErrLastAdmin is returned when a change would leave no active Admin.
+	ErrLastAdmin = errors.New("the last active Admin cannot be demoted or disabled")
 )
 
 // User is a user row joined with its role and permissions.
@@ -141,30 +144,76 @@ func (s *Store) Users(ctx context.Context) ([]User, error) {
 	return collect(rows, func(r pgx.Rows) (User, error) { return scanUser(r) })
 }
 
-// SetUserRole changes a user's role.
+// SetUserRole changes a user's role. It refuses with ErrLastAdmin when the
+// user is the last active Admin and the new role is not Admin.
 func (s *Store) SetUserRole(ctx context.Context, userID, roleID int64) error {
-	tag, err := s.db.Exec(ctx, `UPDATE users SET role_id = $2 WHERE id = $1`, userID, roleID)
-	if pgCode(err) == codeForeignKeyViolation {
-		return ErrRoleNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	return s.InTx(ctx, func(tx *Store) error {
+		if err := tx.guardLastAdmin(ctx, userID, `SELECT name = 'Admin' AND builtin FROM roles WHERE id = $1`, roleID); err != nil {
+			return err
+		}
+		tag, err := tx.db.Exec(ctx, `UPDATE users SET role_id = $2 WHERE id = $1`, userID, roleID)
+		if pgCode(err) == codeForeignKeyViolation {
+			return ErrRoleNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrUserNotFound
+		}
+		return nil
+	})
 }
 
 // SetUserDisabled disables or re-enables an account. Sessions of a
 // disabled account stop working at once (SessionUserAt skips them).
+// Disabling the last active Admin is refused with ErrLastAdmin.
 func (s *Store) SetUserDisabled(ctx context.Context, userID int64, disabled bool) error {
-	tag, err := s.db.Exec(ctx, `UPDATE users SET disabled = $2 WHERE id = $1`, userID, disabled)
+	return s.InTx(ctx, func(tx *Store) error {
+		if disabled {
+			if err := tx.guardLastAdmin(ctx, userID, `SELECT false`); err != nil {
+				return err
+			}
+		}
+		tag, err := tx.db.Exec(ctx, `UPDATE users SET disabled = $2 WHERE id = $1`, userID, disabled)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrUserNotFound
+		}
+		return nil
+	})
+}
+
+// guardLastAdmin returns ErrLastAdmin when userID is an active Admin, the
+// change leaves it no Admin (stillAdmin, a query over args, is false or
+// finds no row) and no other active Admin exists. The active Admin rows
+// are locked, so concurrent demotions are serialised and cannot both pass.
+func (s *Store) guardLastAdmin(ctx context.Context, userID int64, stillAdmin string, args ...any) error {
+	rows, err := s.db.Query(ctx, `SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+		WHERE r.name = 'Admin' AND r.builtin AND NOT u.disabled FOR UPDATE OF u`)
 	if err != nil {
 		return err
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrUserNotFound
+	ids, err := collect(rows, func(r pgx.Rows) (int64, error) {
+		var id int64
+		err := r.Scan(&id)
+		return id, err
+	})
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(ids, userID) || len(ids) > 1 {
+		return nil
+	}
+	var keep bool
+	err = s.db.QueryRow(ctx, stillAdmin, args...).Scan(&keep)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	if !keep {
+		return ErrLastAdmin
 	}
 	return nil
 }

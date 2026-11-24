@@ -19,6 +19,8 @@ const (
 	pushHistoryRows = 20
 	auditPageSize   = 50
 	maxAuditPage    = 10000
+	// dojoCheckTimeout bounds "Test connection".
+	dojoCheckTimeout = 15 * time.Second
 )
 
 // SettingsTab is a tab of the settings pages.
@@ -239,7 +241,9 @@ func (s *Server) dojoTest(w http.ResponseWriter, r *http.Request) {
 		d.Error = "Save an API token first."
 	default:
 		client := s.dojoClient(st)
-		res, cerr := client.Check(ctx, st.Product)
+		cctx, cancel := context.WithTimeout(ctx, dojoCheckTimeout)
+		res, cerr := client.Check(cctx, st.Product)
+		cancel()
 		d.Check = checklist(st, res, cerr)
 		s.audit(r, &u.ID, "dojo.test", "dojo_config", map[string]any{"ok": cerr == nil && res.CanImport})
 		s.renderDojo(w, r, http.StatusOK, d)
@@ -363,7 +367,9 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(entries) > auditPageSize {
 		entries = entries[:auditPageSize]
-		d.Next = auditHref(d.Action, d.Page+1)
+		if d.Page < maxAuditPage {
+			d.Next = auditHref(d.Action, d.Page+1)
+		}
 	}
 	if d.Page > 1 {
 		d.Prev = auditHref(d.Action, d.Page-1)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"sort"
+	"time"
 
 	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/dojo"
@@ -18,18 +19,24 @@ type adminData struct {
 	nextRole int64
 	dojo     *store.DojoConfig
 	pushes   []store.DojoPush
+	// auditFull makes AuditQuery return a full page at any offset.
+	auditFull bool
 }
 
 // fakeChecker is a DefectDojo client with a fixed Check result.
 type fakeChecker struct {
-	res     dojo.CheckResult
-	err     error
-	token   string // token of the settings the client was built for
-	product string // product passed to Check
+	res      dojo.CheckResult
+	err      error
+	token    string        // token of the settings the client was built for
+	product  string        // product passed to Check
+	deadline time.Duration // time left on the Check context
 }
 
-func (f *fakeChecker) Check(_ context.Context, product string) (dojo.CheckResult, error) {
+func (f *fakeChecker) Check(ctx context.Context, product string) (dojo.CheckResult, error) {
 	f.product = product
+	if dl, ok := ctx.Deadline(); ok {
+		f.deadline = time.Until(dl)
+	}
 	return f.res, f.err
 }
 
@@ -224,6 +231,9 @@ func (f *fakeStore) SetUserRole(_ context.Context, userID, roleID int64) error {
 	if !ok {
 		return store.ErrRoleNotFound
 	}
+	if r.Name != auth.RoleAdmin && f.lastAdmin(u) {
+		return store.ErrLastAdmin
+	}
 	u.RoleID, u.RoleName, u.Perms = r.ID, r.Name, r.Perms
 	return nil
 }
@@ -235,8 +245,24 @@ func (f *fakeStore) SetUserDisabled(_ context.Context, userID int64, disabled bo
 	if !ok {
 		return store.ErrUserNotFound
 	}
+	if disabled && f.lastAdmin(u) {
+		return store.ErrLastAdmin
+	}
 	u.Disabled = disabled
 	return nil
+}
+
+// lastAdmin reports whether u is the only active Admin (mirrors the store).
+func (f *fakeStore) lastAdmin(u *store.User) bool {
+	if u.RoleName != auth.RoleAdmin || u.Disabled {
+		return false
+	}
+	for _, o := range f.users {
+		if o.ID != u.ID && o.RoleName == auth.RoleAdmin && !o.Disabled {
+			return false
+		}
+	}
+	return true
 }
 
 func (f *fakeStore) AuditQuery(_ context.Context, q store.AuditFilter) ([]store.AuditEntry, error) {
@@ -259,6 +285,12 @@ func (f *fakeStore) AuditQuery(_ context.Context, q store.AuditFilter) ([]store.
 			}
 		}
 		all = append(all, e)
+	}
+	if f.admin.auditFull {
+		for len(all) < q.Limit {
+			all = append(all, store.AuditEntry{Action: "pad", Details: "{}"})
+		}
+		q.Offset = 0
 	}
 	if q.Offset >= len(all) {
 		return nil, nil

@@ -316,6 +316,7 @@ func (s *Server) signatureUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) signatureToggle(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 	row, ok := s.loadSignature(w, r)
 	if !ok {
 		return

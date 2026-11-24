@@ -170,3 +170,40 @@ func TestDeleteCustomRole(t *testing.T) {
 	rec = e.post("/settings/roles/1/delete", nil, c)
 	assert.Equal(t, "Built-in roles cannot be deleted.", flashOf(t, rec))
 }
+
+func TestLastAdminCannotBeDemotedOrDisabled(t *testing.T) {
+	e := newEnv(t)
+	// A user administrator with a custom role holding every permission but
+	// settings.admin cannot demote the only Admin either: the store refuses.
+	all := []string{"targets.read", "targets.write", "scans.run", "results.read", "results.edit",
+		"signatures.write", "export", "users.admin", "settings.admin"}
+	rid, _ := e.st.CreateRole(t.Context(), "Root-like", all)
+	ua := e.st.addUser(t, "ua", "correct-horse", auth.RoleViewer, false)
+	e.st.SetUserRole(t.Context(), ua.ID, rid)
+	c := e.st.session(ua.ID)
+	root := e.st.addUser(t, "root", "correct-horse", auth.RoleAdmin, false)
+	id := strconv.FormatInt(root.ID, 10)
+
+	rec := e.post("/settings/users/"+id+"/role", url.Values{"role": {"Viewer"}}, c)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Contain(t, "last active Admin", rec.Body.String())
+
+	rec = e.post("/settings/users/"+id+"/disable", nil, c)
+	assert.Equal(t, http.StatusConflict, rec.Code)
+	assert.Equal(t, auth.RoleAdmin, e.st.user(root.ID).RoleName)
+	assert.False(t, e.st.user(root.ID).Disabled)
+}
+
+func TestDeleteRoleNeedsItsPerms(t *testing.T) {
+	e := newEnv(t)
+	rid, _ := e.st.CreateRole(t.Context(), "User admins", []string{"users.admin", "results.read"})
+	ua := e.st.addUser(t, "ua", "correct-horse", auth.RoleViewer, false)
+	e.st.SetUserRole(t.Context(), ua.ID, rid)
+	other, _ := e.st.CreateRole(t.Context(), "Scanners", []string{"scans.run"})
+
+	rec := e.post("/settings/roles/"+strconv.FormatInt(other, 10)+"/delete", nil, e.st.session(ua.ID))
+
+	assert.Equal(t, http.StatusSeeOther, rec.Code)
+	assert.Contain(t, "scans.run", flashOf(t, rec))
+	assert.Len(t, 2, e.st.admin.roles)
+}

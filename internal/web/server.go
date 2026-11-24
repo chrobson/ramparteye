@@ -142,8 +142,9 @@ type Deps struct {
 	// settings, token included (nil = dojo.DefaultClient).
 	DojoClient func(dojo.Settings) DojoChecker
 	// SignaturesChanged, when set, is called after a signature was created,
-	// changed, enabled, disabled, deleted or imported, so the scanner can
-	// reload its signature set.
+	// changed, enabled, disabled or deleted, so the scanner can reload its
+	// signature set. A nuclei import does not call it: imported signatures
+	// are disabled until enabled one by one.
 	SignaturesChanged func()
 }
 

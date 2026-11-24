@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -260,4 +261,23 @@ func TestSettingsAuditLog(t *testing.T) {
 
 	body = e.get("/settings/audit?action=user.create&page=2", c).Body.String()
 	assert.Equal(t, 10, strings.Count(body, "user:&lt;b&gt;x&lt;/b&gt;"))
+}
+
+func TestAuditNoOlderLinkAtLastPage(t *testing.T) {
+	e := newEnv(t)
+	e.st.admin.auditFull = true
+	c := e.login(t, auth.RoleAdmin)
+
+	assert.Contain(t, "Older", e.get("/settings/audit?page="+strconv.Itoa(maxAuditPage-1), c).Body.String())
+	assert.NotContain(t, "Older", e.get("/settings/audit?page="+strconv.Itoa(maxAuditPage), c).Body.String())
+}
+
+func TestDojoTestConnectionHasDeadline(t *testing.T) {
+	e := newEnv(t)
+	c := e.login(t, auth.RoleAdmin)
+	e.post("/settings/integrations", dojoForm(), c)
+
+	e.post("/settings/integrations/test", nil, c)
+
+	assert.True(t, e.checker.deadline > 0 && e.checker.deadline <= 15*time.Second)
 }

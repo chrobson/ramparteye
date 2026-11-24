@@ -321,3 +321,12 @@ func TestBuiltinPolishTitles(t *testing.T) {
 		assert.Len(t, 1, ds, "%s: %q", tt.id, tt.title)
 	}
 }
+
+func TestReservedIDsRejected(t *testing.T) {
+	for _, id := range []string{"import", "new", "backtest"} {
+		_, err := Parse([]byte("id: " + id + "\nname: x\ncategory: other\nconfidence: 50\n" +
+			"matchers:\n  - type: title\n    regex: 'x'\n"))
+
+		assert.ErrorContain(t, "id "+id+" is reserved", err)
+	}
+}
