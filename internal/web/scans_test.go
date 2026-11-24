@@ -1,8 +1,10 @@
 package web
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -173,6 +175,7 @@ func TestRunPushNow(t *testing.T) {
 	assert.Equal(t, http.StatusSeeOther, rec.Code)
 	assert.Equal(t, "/scans/6", rec.Header().Get("Location"))
 	assert.Equal(t, []string{"6:manual"}, e.pusher.pushed)
+
 	assert.Equal(t, "Pushed 12 findings of run #6 to DefectDojo: 3 new, 1 closed.", flashOf(t, rec))
 	assert.Equal(t, "dojo.push", e.st.lastAudit().Action)
 }
@@ -231,4 +234,21 @@ func TestRunPageEscapesReceiptNotes(t *testing.T) {
 
 	assert.NotContain(t, "<script>alert", body)
 	assert.True(t, strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;"))
+}
+
+func TestRunPushDetachedFromRequest(t *testing.T) {
+	e := scansEnv(t)
+	e.withPushResult(dojo.PushRecord{RunID: 6, OK: true}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the browser went away before the push started
+	req := httptest.NewRequest(http.MethodPost, "/scans/6/push", nil).WithContext(ctx)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.AddCookie(e.login(t, auth.RoleAnalyst))
+
+	e.h.ServeHTTP(httptest.NewRecorder(), req)
+
+	assert.Equal(t, []string{"6:manual"}, e.pusher.pushed)
+	assert.NoError(t, e.pusher.pushErrAtCall)
+	left := e.pusher.pushDeadline
+	assert.True(t, left > time.Minute && left <= 2*time.Minute, "timeout %s", left)
 }

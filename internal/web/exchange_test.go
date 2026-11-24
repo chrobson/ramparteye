@@ -163,3 +163,17 @@ func TestExchangeWithoutBackend(t *testing.T) {
 	rec := e.upload("/exchange/import", "file", "scan.xml", []byte("<nmaprun/>"), nil, c)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }
+
+func TestExchangeImportSurvivesSnapshotFailure(t *testing.T) {
+	x := &fakeExchange{rep: exchange.Report{RunID: 9, Hosts: 1}, snapErr: errors.New("db hiccup")}
+	e := newEnv(t, withExchange(x))
+	c := e.login(t, auth.RoleOperator)
+
+	rec := e.upload("/exchange/import", "file", "scan.xml", []byte("<nmaprun/>"), nil, c)
+	page := e.get("/exchange", c)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contain(t, `href="/scans/9"`, rec.Body.String())
+	assert.Contain(t, "could not be loaded", rec.Body.String())
+	assert.Equal(t, http.StatusOK, page.Code)
+}

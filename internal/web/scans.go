@@ -17,8 +17,10 @@ import (
 	"github.com/chrobson/ramparteye/internal/store"
 )
 
-// scansListLen is the number of runs on the scans page.
-const scansListLen = 50
+const (
+	scansListLen      = 50 // runs on the scans page
+	manualPushTimeout = 2 * time.Minute
+)
 
 // RunRow is a run on the scans page.
 type RunRow struct {
@@ -287,7 +289,10 @@ func (s *Server) runPush(w http.ResponseWriter, r *http.Request) {
 	}
 	msg := "DefectDojo is not configured. An administrator can set it up in Settings."
 	if s.d.Pusher != nil {
-		rec, err := s.d.Pusher.PushRun(r.Context(), run.ID, dojo.TriggerManual)
+		// The push finishes and is recorded even if the browser goes away.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), manualPushTimeout)
+		rec, err := s.d.Pusher.PushRun(ctx, run.ID, dojo.TriggerManual)
+		cancel()
 		msg = pushMessage(run.ID, rec, err)
 		u, _ := auth.CurrentUser(r.Context())
 		s.audit(r, &u.ID, "dojo.push", "scan_run:"+strconv.FormatInt(run.ID, 10),

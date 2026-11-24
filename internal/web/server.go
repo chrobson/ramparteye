@@ -72,6 +72,7 @@ type Store interface {
 	DeleteTarget(ctx context.Context, id int64) (string, error)
 	ScanConfigs(ctx context.Context) ([]store.ScanConfig, error)
 	ScanConfig(ctx context.Context, id int64) (store.ScanConfig, error)
+	LastRun(ctx context.Context, configID int64) (*store.RunInfo, error)
 	CreateScanConfig(ctx context.Context, c store.ScanConfig) (int64, error)
 	UpdateScanConfig(ctx context.Context, c store.ScanConfig) error
 	DeleteScanConfig(ctx context.Context, id int64) error
@@ -147,6 +148,8 @@ type Server struct {
 	pages    *pages
 	static   fs.FS
 	instance string
+	// lookupTimeout bounds one DNS lookup of a domain target on import.
+	lookupTimeout time.Duration
 }
 
 // NewServer parses the embedded templates and returns the server.
@@ -162,7 +165,8 @@ func newServerFS(d Deps, tmpl, static fs.FS, now func() time.Time) (*Server, err
 	if d.Store == nil {
 		return nil, errors.New("web: Deps.Store is required")
 	}
-	s := &Server{d: d, log: d.Log, now: now, static: static, instance: InstanceID(d.Cfg)}
+	s := &Server{d: d, log: d.Log, now: now, static: static, instance: InstanceID(d.Cfg),
+		lookupTimeout: lookupTimeout}
 	if s.log == nil {
 		s.log = slog.Default()
 	}

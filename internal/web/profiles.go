@@ -51,7 +51,13 @@ type ProfileRow struct {
 	Window   string
 	Schedule string
 	Enabled  bool
-	LastRun  *RunRow
+	LastRun  *LastRun
+}
+
+// LastRun is the newest run of a profile.
+type LastRun struct {
+	ID     int64
+	Status RunStatus
 }
 
 // ProfilesData is the scan profiles page.
@@ -133,7 +139,7 @@ func (s *Server) rateCap() int {
 	if s.d.Cfg.MaxRate > 0 {
 		return s.d.Cfg.MaxRate
 	}
-	return 5000
+	return config.DefaultMaxRate
 }
 
 // formInt parses a whole number in [lo, hi]; empty gives def.
@@ -271,13 +277,6 @@ func (s *Server) profilesList(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, r)
 		return
 	}
-	runs, err := s.d.Store.Runs(ctx, scansListLen)
-	if err != nil {
-		s.log.Error("list runs", "err", err)
-		s.serverError(w, r)
-		return
-	}
-	active := s.activeSet()
 	d := ProfilesData{Title: "Scan profiles", MaxRate: s.rateCap()}
 	for _, c := range cfgs {
 		row := ProfileRow{ID: c.ID, Name: c.Name, Targets: "all targets", Ports: s.portsLabel(c),
@@ -291,12 +290,14 @@ func (s *Server) profilesList(w http.ResponseWriter, r *http.Request) {
 		if c.EveryMinutes != nil {
 			row.Schedule = "every " + strconv.Itoa(*c.EveryMinutes) + " min"
 		}
-		for _, run := range runs {
-			if run.ConfigID != nil && *run.ConfigID == c.ID {
-				rr := s.runRow(run, active)
-				row.LastRun = &rr
-				break
-			}
+		last, err := s.d.Store.LastRun(ctx, c.ID)
+		if err != nil {
+			s.log.Error("last run of scan profile", "id", c.ID, "err", err)
+			s.serverError(w, r)
+			return
+		}
+		if last != nil {
+			row.LastRun = &LastRun{ID: last.ID, Status: runStatus(last.Status, false)}
 		}
 		d.Profiles = append(d.Profiles, row)
 	}

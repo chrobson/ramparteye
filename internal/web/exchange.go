@@ -62,6 +62,8 @@ type ExchangeData struct {
 	Error     string
 	Report    *ImportView
 	Run       *ExportRun
+	// RunUnavailable: the latest run could not be loaded.
+	RunUnavailable bool
 }
 
 func formatLabel(f exchange.Format) string {
@@ -87,9 +89,9 @@ func (s *Server) renderExchange(w http.ResponseWriter, r *http.Request, status i
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 		case err != nil:
+			// The page still renders: an import report must not turn into a 500.
 			s.log.Error("load export snapshot", "err", err)
-			s.serverError(w, r)
-			return
+			d.RunUnavailable = true
 		default:
 			d.Run = &ExportRun{ID: snap.RunID, Kind: snap.RunKind, Date: snap.Date, Services: len(snap.Services),
 				Findings: len(snap.Findings())}

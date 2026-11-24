@@ -27,12 +27,13 @@
 
 {{if and $d.Available (can .Ctx "export")}}<section class="panel mt-4" aria-label="Export">
 {{template "panel-title" "Export"}}
-{{with $d.Run}}<p>Run #{{.ID}}{{if eq .Kind "import"}} (import){{end}}, finished {{ago .Date}}: {{num .Services}} services, {{num .Findings}} DefectDojo findings (false positives excluded).</p>
+{{if $d.RunUnavailable}}<p class="text-muted">Latest run: – (it could not be loaded; see the server log and reload the page).</p>
+{{else}}{{with $d.Run}}<p>Run #{{.ID}}{{if eq .Kind "import"}} (import){{end}}, finished {{ago .Date}}: {{num .Services}} services, {{num .Findings}} DefectDojo findings (false positives excluded).</p>
 <div class="mt-2 flex flex-wrap gap-2">
 <a class="btn" href="/exchange/export.csv?run={{.ID}}">Download CSV</a>
 <a class="btn" href="/exchange/export.json?run={{.ID}}">Download JSON</a>
 </div>
 <p class="mt-2 text-xs text-muted">Files are built on request and not stored on the server. To export another run, open it on the Scans page.</p>
-{{else}}{{template "empty" (dict "Title" "No finished run to export yet" "Text" "Run a scan or import results first.")}}{{end}}
+{{else}}{{template "empty" (dict "Title" "No finished run to export yet" "Text" "Run a scan or import results first.")}}{{end}}{{end}}
 </section>{{end}}
 {{end}}

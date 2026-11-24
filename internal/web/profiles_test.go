@@ -4,12 +4,14 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/ctx42/testing/pkg/assert"
 
 	"github.com/chrobson/ramparteye/internal/auth"
+	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/scope"
@@ -223,6 +225,7 @@ func TestProfileRunNow(t *testing.T) {
 	assert.Equal(t, http.StatusSeeOther, rec.Code)
 	assert.Equal(t, "/scans/12", rec.Header().Get("Location"))
 	assert.Equal(t, []int64{3}, e.runner.started)
+	assert.NoError(t, e.runner.startCtx.Err(), "run context outlives the request")
 	assert.Equal(t, "Scan #12 started.", flashOf(t, rec))
 	assert.Equal(t, "scan.start", e.st.lastAudit().Action)
 }
@@ -277,4 +280,25 @@ func TestProfileDelete(t *testing.T) {
 	e.st.scans.deleteErr = store.ErrScanConfigBusy
 	rec = e.post("/profiles/4/delete", nil, c)
 	assert.Contain(t, "unfinished run", flashOf(t, rec))
+}
+
+func TestProfilesLastRunPerProfile(t *testing.T) {
+	e := profilesEnv(t)
+	e.st.scans.configs = []store.ScanConfig{{ID: 3, Name: "Old profile"}, {ID: 4, Name: "Never run"}}
+	e.st.scans.lastRuns = map[int64]*store.RunInfo{3: {ID: 77, Status: store.RunCancelled}}
+
+	body := e.get("/profiles", e.login(t, auth.RoleViewer)).Body.String()
+
+	assert.Contain(t, `href="/scans/77"`, body)
+	assert.Contain(t, "Cancelled", body)
+}
+
+func TestProfileRateCapDefault(t *testing.T) {
+	e := newEnv(t, func(d *Deps) { d.Cfg.MaxRate = 0 })
+	f := profileForm()
+	f.Set("max_rate", "9000")
+
+	rec := e.post("/profiles", f, e.login(t, auth.RoleOperator))
+
+	assert.Contain(t, strconv.Itoa(config.DefaultMaxRate), rec.Body.String())
 }

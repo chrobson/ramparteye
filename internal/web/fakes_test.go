@@ -238,12 +238,13 @@ type fakeRunner struct {
 	cancelled bool
 	cancelBy  int64
 	started   []int64 // profiles passed to Start
-	startRun  int64   // run id Start returns
+	startCtx  context.Context
+	startRun  int64 // run id Start returns
 	startErr  error
 }
 
-func (f *fakeRunner) Start(_ context.Context, configID int64) (int64, error) {
-	f.started = append(f.started, configID)
+func (f *fakeRunner) Start(ctx context.Context, configID int64) (int64, error) {
+	f.started, f.startCtx = append(f.started, configID), ctx
 	return f.startRun, f.startErr
 }
 
@@ -270,16 +271,22 @@ func (f *fakeRunner) ActiveRuns() []int64 { return f.active }
 
 // fakePusher returns a fixed chip state.
 type fakePusher struct {
-	chip    dojo.ChipState
-	err     error
-	pushRec dojo.PushRecord
-	pushErr error
-	pushed  []string // "runID:trigger" of every PushRun call
+	chip          dojo.ChipState
+	err           error
+	pushRec       dojo.PushRecord
+	pushErr       error
+	pushed        []string      // "runID:trigger" of every PushRun call
+	pushErrAtCall error         // pushCtx.Err() when PushRun was called
+	pushDeadline  time.Duration // time left on pushCtx when PushRun was called
 }
 
 func (f *fakePusher) Status(context.Context) (dojo.ChipState, error) { return f.chip, f.err }
 
-func (f *fakePusher) PushRun(_ context.Context, runID int64, trigger string) (dojo.PushRecord, error) {
+func (f *fakePusher) PushRun(ctx context.Context, runID int64, trigger string) (dojo.PushRecord, error) {
+	f.pushErrAtCall = ctx.Err()
+	if dl, ok := ctx.Deadline(); ok {
+		f.pushDeadline = time.Until(dl)
+	}
 	f.pushed = append(f.pushed, fmt.Sprintf("%d:%s", runID, trigger))
 	return f.pushRec, f.pushErr
 }

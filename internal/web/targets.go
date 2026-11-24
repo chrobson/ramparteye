@@ -7,8 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/chrobson/ramparteye/internal/auth"
 	"github.com/chrobson/ramparteye/internal/model"
@@ -16,8 +19,12 @@ import (
 	"github.com/chrobson/ramparteye/internal/target"
 )
 
-// maxRefusedShown bounds the refused rows listed in an import report.
-const maxRefusedShown = 200
+// Target import limits.
+const (
+	maxRefusedShown = 200 // refused rows listed in an import report
+	lookupWorkers   = 8   // concurrent DNS lookups of domain targets
+	lookupTimeout   = 3 * time.Second
+)
 
 const noScopeMessage = "No scan scope configured: set RAMPART_ALLOWED_CIDRS. Target imports and scans are refused until a scope is set."
 
@@ -203,7 +210,12 @@ func (s *Server) targetsAdd(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if j, ok := index[t.Value]; ok {
-			ts[j].Tags, _ = target.NormalizeTags(append(ts[j].Tags, t.Tags...))
+			merged, err := target.NormalizeTags(append(slices.Clone(ts[j].Tags), t.Tags...))
+			if err != nil {
+				rep.refuse(i+1, strings.TrimSpace(line), err.Error())
+				continue
+			}
+			ts[j].Tags = merged
 			continue
 		}
 		index[t.Value] = len(ts)
@@ -231,11 +243,14 @@ func (s *Server) targetsImport(w http.ResponseWriter, r *http.Request) {
 		s.renderTargets(w, r, http.StatusUnprocessableEntity, TargetsData{Error: noScopeMessage})
 		return
 	}
-	var ts []model.Target
+	var (
+		ts    []model.Target
+		lines []int
+	)
 	if isJSONUpload(up.Name, up.Data) {
-		ts, err = target.ImportJSON(bytes.NewReader(up.Data))
+		ts, lines, err = target.ImportJSONLines(bytes.NewReader(up.Data))
 	} else {
-		ts, err = target.ImportCSV(bytes.NewReader(up.Data))
+		ts, lines, err = target.ImportCSVLines(bytes.NewReader(up.Data))
 	}
 	if err != nil {
 		s.renderTargets(w, r, http.StatusUnprocessableEntity, TargetsData{
@@ -250,7 +265,7 @@ func (s *Server) targetsImport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	s.storeTargets(w, r, "targets.import", ts, nil, &TargetReport{Source: path.Base(up.Name)})
+	s.storeTargets(w, r, "targets.import", ts, lines, &TargetReport{Source: path.Base(up.Name)})
 }
 
 func isJSONUpload(name string, data []byte) bool {
@@ -267,16 +282,16 @@ func isJSONUpload(name string, data []byte) bool {
 func (s *Server) storeTargets(w http.ResponseWriter, r *http.Request, action string, ts []model.Target, lines []int, rep *TargetReport) {
 	ctx := r.Context()
 	var ok []model.Target
-	for i, t := range ts {
+	for i, err := range s.checkTargets(ctx, ts) {
+		if err == nil {
+			ok = append(ok, ts[i])
+			continue
+		}
 		line := 0
 		if i < len(lines) {
 			line = lines[i]
 		}
-		if err := s.checkTarget(ctx, t); err != nil {
-			rep.refuse(line, t.Value, err.Error())
-			continue
-		}
-		ok = append(ok, t)
+		rep.refuse(line, ts[i].Value, err.Error())
 	}
 	u, _ := auth.CurrentUser(ctx)
 	n, err := s.d.Store.InsertTargets(ctx, ok, &u.ID)
@@ -291,9 +306,28 @@ func (s *Server) storeTargets(w http.ResponseWriter, r *http.Request, action str
 	s.renderTargets(w, r, http.StatusOK, TargetsData{Report: rep})
 }
 
-func (s *Server) checkTarget(ctx context.Context, t model.Target) error {
-	_, err := target.Resolve(ctx, t, s.d.Resolver, s.d.Scope)
-	return err
+// checkTargets runs target.Resolve on every target, at most lookupWorkers
+// at a time and each bounded by lookupTimeout, and returns the errors in
+// the order of ts. Only domain targets cause lookups.
+func (s *Server) checkTargets(ctx context.Context, ts []model.Target) []error {
+	errs := make([]error, len(ts))
+	sem := make(chan struct{}, lookupWorkers)
+	var wg sync.WaitGroup
+	for i, t := range ts {
+		if t.Kind != model.TargetDomain {
+			_, errs[i] = target.Resolve(ctx, t, s.d.Resolver, s.d.Scope)
+			continue
+		}
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			lctx, cancel := context.WithTimeout(ctx, s.lookupTimeout)
+			defer cancel()
+			_, errs[i] = target.Resolve(lctx, t, s.d.Resolver, s.d.Scope)
+		})
+	}
+	wg.Wait()
+	return errs
 }
 
 // targetTags replaces the tags of a target.

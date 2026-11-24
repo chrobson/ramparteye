@@ -39,13 +39,20 @@ type entry struct {
 // values are merged (tags are combined). Scope is not checked here: callers
 // run Resolve on every returned target.
 func ImportCSV(r io.Reader) ([]model.Target, error) {
+	ts, _, err := ImportCSVLines(r)
+	return ts, err
+}
+
+// ImportCSVLines is ImportCSV that also returns, for every target, the
+// source line of its first occurrence.
+func ImportCSVLines(r io.Reader) ([]model.Target, []int, error) {
 	data, err := readLimited(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	es, err := parseCSV(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return build(es)
 }
@@ -53,13 +60,20 @@ func ImportCSV(r io.Reader) ([]model.Target, error) {
 // ImportJSON reads [{"value": "...", "tags": ["a","b"]}]; tags may also be a
 // single "a;b" string. Semantics otherwise match ImportCSV.
 func ImportJSON(r io.Reader) ([]model.Target, error) {
+	ts, _, err := ImportJSONLines(r)
+	return ts, err
+}
+
+// ImportJSONLines is ImportJSON that also returns, for every target, the
+// source line where its first object starts.
+func ImportJSONLines(r io.Reader) ([]model.Target, []int, error) {
 	data, err := readLimited(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	es, err := parseJSON(data)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	return build(es)
 }
@@ -75,8 +89,11 @@ func readLimited(r io.Reader) ([]byte, error) {
 	return bytes.TrimPrefix(data, []byte("\xef\xbb\xbf")), nil
 }
 
-func build(es []entry) ([]model.Target, error) {
-	var out []model.Target
+func build(es []entry) ([]model.Target, []int, error) {
+	var (
+		out   []model.Target
+		lines []int
+	)
 	index := map[string]int{}
 	for _, e := range es {
 		var tg model.Target
@@ -88,20 +105,21 @@ func build(es []entry) ([]model.Target, error) {
 			tg.Tags, err = NormalizeTags(e.tags)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("line %d: %q: %w", e.line, truncate(e.value), err)
+			return nil, nil, fmt.Errorf("line %d: %q: %w", e.line, truncate(e.value), err)
 		}
 		if i, ok := index[tg.Value]; ok {
 			merged, err := NormalizeTags(append(out[i].Tags, tg.Tags...))
 			if err != nil {
-				return nil, fmt.Errorf("line %d: %q: %w", e.line, truncate(e.value), err)
+				return nil, nil, fmt.Errorf("line %d: %q: %w", e.line, truncate(e.value), err)
 			}
 			out[i].Tags = merged
 			continue
 		}
 		index[tg.Value] = len(out)
 		out = append(out, tg)
+		lines = append(lines, e.line)
 	}
-	return out, nil
+	return out, lines, nil
 }
 
 func truncate(s string) string {

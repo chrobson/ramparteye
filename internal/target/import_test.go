@@ -80,3 +80,18 @@ func TestImportJSONErrors(t *testing.T) {
 	_, err = ImportJSON(bytes.NewReader(bytes.Repeat([]byte(" "), MaxImportBytes+1)))
 	assert.ErrorIs(t, ErrTooBig, err)
 }
+
+func TestImportLines(t *testing.T) {
+	csv := "value,tags\n\n# comment\n10.0.0.1,a\n10.0.0.2\n10.0.0.1,b\nexample.com\n"
+	ts, lines, err := ImportCSVLines(strings.NewReader(csv))
+	assert.NoError(t, err)
+	assert.Len(t, 3, ts)
+	assert.Equal(t, []int{4, 5, 7}, lines)
+	assert.Equal(t, []string{"a", "b"}, ts[0].Tags)
+
+	js := "[\n {\"value\": \"10.0.0.1\"},\n {\"value\": \"10.0.0.1\"},\n {\"value\": \"10.0.0.3\"}\n]"
+	ts, lines, err = ImportJSONLines(strings.NewReader(js))
+	assert.NoError(t, err)
+	assert.Len(t, 2, ts)
+	assert.Equal(t, []int{2, 4}, lines)
+}

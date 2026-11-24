@@ -32,6 +32,11 @@ type scanData struct {
 	changeRuns []store.ChangeRun
 	series     []store.RunPoint
 	nextTarget int64
+	lastRuns   map[int64]*store.RunInfo // LastRun by profile
+}
+
+func (f *fakeStore) LastRun(_ context.Context, configID int64) (*store.RunInfo, error) {
+	return f.scans.lastRuns[configID], nil
 }
 
 func (f *fakeStore) ScanConfigs(context.Context) ([]store.ScanConfig, error) {
@@ -219,6 +224,11 @@ func withResolver(m map[string][]string) envOpt {
 			return out, nil
 		}
 	}
+}
+
+// withResolverFunc resolves domains with fn.
+func withResolverFunc(fn func(ctx context.Context, host string) ([]netip.Addr, error)) envOpt {
+	return func(d *Deps) { d.Resolver = fn }
 }
 
 // withPushResult makes PushRun return rec and err.
