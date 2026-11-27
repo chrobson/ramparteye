@@ -383,4 +383,15 @@
   .push-skipped td {
     @apply text-dim;
   }
+
+  /* Time machine: a past inventory must never look like the current one. */
+  .asof {
+    @apply rounded-md border-2 border-dashed border-med bg-med-bg px-3 py-2 text-fg;
+  }
+  .runs > i.run-mark {
+    @apply ring-2 ring-fg ring-offset-1 ring-offset-panel;
+  }
+  .change-mark td {
+    @apply bg-med-bg font-semibold;
+  }
 }

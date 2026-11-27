@@ -28,6 +28,7 @@ var weekdays = [7]string{"Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
 type RunCell struct {
 	Class string // run-up | run-down | run-na
 	Label string
+	Mark  bool // the run a time machine page shows
 }
 
 // HeatCell is one weekday/hour cell of the availability heatmap.
@@ -71,6 +72,7 @@ type ChangeRow struct {
 	RunID  int64
 	Kind   model.ChangeKind
 	Detail string
+	Mark   bool // recorded by the run a time machine page shows
 }
 
 // ServiceRow is a service on the host page.
@@ -97,23 +99,28 @@ type FindingRow struct {
 
 // HostPage is the data of /assets/{ip}.
 type HostPage struct {
-	Title     string
-	IP        string
-	Hostname  string
-	State     model.HostStateKind
-	StateCls  string
-	FirstSeen time.Time
-	LastSeen  time.Time
-	Avail     AvailView
-	Changes   []ChangeRow
-	Services  []ServiceRow
-	Findings  []FindingRow
-	Note      AnnotationForm
+	Title      string
+	IP         string
+	Hostname   string
+	State      model.HostStateKind
+	StateLabel string
+	StateCls   string
+	AssetsHref string
+	AsOf       *AsOf // set when the page shows a past run
+	FirstSeen  time.Time
+	LastSeen   time.Time
+	Avail      AvailView
+	Changes    []ChangeRow
+	Services   []ServiceRow
+	Findings   []FindingRow
+	Note       AnnotationForm
 	// InactiveAfter is the number of misses after which a host is marked inactive.
 	InactiveAfter int
 }
 
-func availView(runs []store.AssetRun) AvailView {
+// availView builds the availability panel; mark is the run a time machine
+// page shows (0 = none).
+func availView(runs []store.AssetRun, mark int64) AvailView {
 	pres := make([]diff.RunPresence, len(runs))
 	v := AvailView{Lookback: availabilityRuns}
 	for i, r := range runs {
@@ -126,6 +133,9 @@ func availView(runs []store.AssetRun) AvailView {
 			c.Class, c.Label = "run-down", "not seen"
 		}
 		c.Label = fmt.Sprintf("Run #%d, %s UTC: %s", r.RunID, r.StartedAt.UTC().Format("2006-01-02 15:04"), c.Label)
+		if r.RunID == mark {
+			c.Mark, c.Label = true, c.Label+" (this run)"
+		}
 		v.Runs = append(v.Runs, c)
 	}
 	a := diff.ComputeAvailability(pres, time.UTC)
@@ -218,10 +228,10 @@ func heatCell(day, hour int, c diff.Cell) HeatCell {
 	return hc
 }
 
-func changeRows(cs []model.Change) []ChangeRow {
+func changeRows(cs []model.Change, mark int64) []ChangeRow {
 	out := make([]ChangeRow, len(cs))
 	for i, c := range cs {
-		out[i] = ChangeRow{RunID: c.RunID, Kind: c.Kind, Detail: changeDetail(c)}
+		out[i] = ChangeRow{RunID: c.RunID, Kind: c.Kind, Detail: changeDetail(c), Mark: mark != 0 && c.RunID == mark}
 	}
 	return out
 }
@@ -246,11 +256,20 @@ func (s *Server) hostPage(w http.ResponseWriter, r *http.Request) {
 	s.renderHost(w, r, http.StatusOK, ip, nil)
 }
 
-// renderHost loads and renders the host page; form, when set, replaces the
-// stored annotation in the form (a rejected submission).
+// renderHost loads and renders the host page, as of the run of the run
+// parameter when there is one; form, when set, replaces the stored
+// annotation in the form (a rejected submission).
 func (s *Server) renderHost(w http.ResponseWriter, r *http.Request, status int, ip netip.Addr, form *AnnotationForm) {
-	p, err := s.loadHost(r.Context(), ip, form)
+	key := model.AssetKey{IP: ip}
+	asOf, err := s.requestAsOf(r, func(run int64) string { return assetPathAt(key, run) })
+	if err != nil {
+		s.runErrorPage(w, r, err)
+		return
+	}
+	p, err := s.loadHost(r.Context(), ip, form, asOf)
 	switch {
+	case errors.Is(err, errNotFound) && asOf != nil:
+		s.notInRun(w, r, key, asOf.RunID)
 	case errors.Is(err, errNotFound):
 		s.notFound(w, r)
 	case err != nil:
@@ -261,9 +280,11 @@ func (s *Server) renderHost(w http.ResponseWriter, r *http.Request, status int, 
 	}
 }
 
-func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationForm) (HostPage, error) {
-	p := HostPage{Title: ip.String(), IP: ip.String(), InactiveAfter: s.d.Cfg.Unstable.InactiveAfterMisses}
-	snap, err := s.loadSnapshot(ctx)
+func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationForm, asOf *AsOf) (HostPage, error) {
+	run := asOf.run()
+	p := HostPage{Title: ip.String() + asOf.titleSuffix(), IP: ip.String(),
+		InactiveAfter: s.d.Cfg.Unstable.InactiveAfterMisses, AssetsHref: assetsPathAt(nil, run), AsOf: asOf}
+	snap, err := s.snapshotAsOf(ctx, asOf)
 	if err != nil {
 		return p, err
 	}
@@ -277,6 +298,10 @@ func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationFo
 		return p, errNotFound
 	}
 	p.State, p.StateCls, p.FirstSeen, p.LastSeen = hs.State, stateClass(hs.State), hs.FirstSeen, hs.LastSeen
+	p.StateLabel = string(hs.State)
+	if asOf != nil {
+		p.StateLabel = runStateLabel(hs.State, run)
+	}
 	p.Hostname = snap.Hostnames[ip]
 
 	hostKey := model.AssetKey{IP: ip}
@@ -284,8 +309,8 @@ func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationFo
 	if err != nil {
 		return p, fmt.Errorf("history: %w", err)
 	}
-	p.Avail = availView(hist.Runs)
-	p.Changes = changeRows(hist.Changes)
+	p.Avail = availView(hist.Runs, run)
+	p.Changes = changeRows(hist.Changes, run)
 
 	svcs := snap.Services[ip]
 	if err := s.attachMeta(ctx, svcs, detectionIDs(svcs)); err != nil {
@@ -294,7 +319,7 @@ func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationFo
 	sort.SliceStable(svcs, func(i, j int) bool { return svcs[i].Key.Port < svcs[j].Key.Port })
 	for _, sv := range svcs {
 		_, noted := snap.Notes[sv.Key]
-		p.Services = append(p.Services, ServiceRow{Href: assetPath(sv.Key), Port: portLabel(sv.Key),
+		p.Services = append(p.Services, ServiceRow{Href: assetPathAt(sv.Key, run), Port: portLabel(sv.Key),
 			VHost: sv.Key.VHost, Product: productLabel(sv.ExportService), Detections: detectionBadges(sv.Detections),
 			Score: sv.Result.Score, Reasons: reasonViews(sv.Result), Noted: noted})
 		for _, d := range sv.Detections {
@@ -307,6 +332,7 @@ func (s *Server) loadHost(ctx context.Context, ip netip.Addr, form *AnnotationFo
 		}
 	}
 	p.Note, err = s.annotationFor(ctx, hostKey, form)
+	p.Note.readOnlyAsOf(hostKey, asOf)
 	return p, err
 }
 
@@ -336,6 +362,8 @@ type ServicePage struct {
 	Title      string
 	Endpoint   string
 	HostHref   string
+	AssetsHref string
+	AsOf       *AsOf // set when the page shows a past run
 	Key        model.AssetKey
 	Svc        store.ExportService
 	Product    string
@@ -380,8 +408,15 @@ func serviceKey(r *http.Request) (model.AssetKey, bool) {
 }
 
 func (s *Server) renderService(w http.ResponseWriter, r *http.Request, status int, key model.AssetKey, form *AnnotationForm) {
-	p, err := s.loadService(r.Context(), key, form)
+	asOf, err := s.requestAsOf(r, func(run int64) string { return assetPathAt(key, run) })
+	if err != nil {
+		s.runErrorPage(w, r, err)
+		return
+	}
+	p, err := s.loadService(r.Context(), key, form, asOf)
 	switch {
+	case errors.Is(err, errNotFound) && asOf != nil:
+		s.notInRun(w, r, key, asOf.RunID)
 	case errors.Is(err, errNotFound):
 		s.notFound(w, r)
 	case err != nil:
@@ -392,10 +427,12 @@ func (s *Server) renderService(w http.ResponseWriter, r *http.Request, status in
 	}
 }
 
-func (s *Server) loadService(ctx context.Context, key model.AssetKey, form *AnnotationForm) (ServicePage, error) {
-	p := ServicePage{Key: key, Endpoint: endpoint(key), HostHref: assetPath(model.AssetKey{IP: key.IP})}
-	p.Title = p.Endpoint + "/" + key.Proto
-	snap, err := s.loadSnapshot(ctx)
+func (s *Server) loadService(ctx context.Context, key model.AssetKey, form *AnnotationForm, asOf *AsOf) (ServicePage, error) {
+	run := asOf.run()
+	p := ServicePage{Key: key, Endpoint: endpoint(key), HostHref: assetPathAt(model.AssetKey{IP: key.IP}, run),
+		AssetsHref: assetsPathAt(nil, run), AsOf: asOf}
+	p.Title = p.Endpoint + "/" + key.Proto + asOf.titleSuffix()
+	snap, err := s.snapshotAsOf(ctx, asOf)
 	if err != nil {
 		return p, err
 	}
@@ -450,8 +487,9 @@ func (s *Server) loadService(ctx context.Context, key model.AssetKey, form *Anno
 	if err != nil {
 		return p, fmt.Errorf("history: %w", err)
 	}
-	p.Avail = availView(hist.Runs)
-	p.Changes = changeRows(hist.Changes)
+	p.Avail = availView(hist.Runs, run)
+	p.Changes = changeRows(hist.Changes, run)
 	p.Note, err = s.annotationFor(ctx, key, form)
+	p.Note.readOnlyAsOf(key, asOf)
 	return p, err
 }

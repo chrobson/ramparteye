@@ -8,7 +8,7 @@
 <p class="mt-1 text-muted">{{if not $run.Applied}}This run has not been compared with the previous one.
 {{else if $run.PrevRunID}}Compared with run <a class="font-mono underline" href="/changes/{{$run.PrevRunID}}">#{{$run.PrevRunID}}</a>.
 {{else}}Baseline: there was no earlier run to compare with.{{end}}
-{{$d.Total}} change{{if ne $d.Total 1}}s{{end}} · <a class="underline" href="/scans/{{$run.RunID}}">run details and safety receipt</a></p>
+{{$d.Total}} change{{if ne $d.Total 1}}s{{end}} · <a class="underline" href="/scans/{{$run.RunID}}">run details and safety receipt</a>{{if eq $run.Status.Key "done"}} · <a class="underline" href="/assets?run={{$run.RunID}}">Inventory as of this run</a>{{end}}</p>
 
 {{if $d.Groups}}<nav class="mt-3 flex flex-wrap gap-2" aria-label="Change kinds">{{range $d.Groups}}<a class="quick" href="#kind-{{.Kind}}">{{.Label}} ({{len .Rows}})</a>{{end}}</nav>
 {{range $d.Groups}}{{$k := .Kind}}<section id="kind-{{.Kind}}" class="panel mt-4" aria-label="{{.Label}}">

@@ -1,8 +1,9 @@
 {{define "title"}}{{.Data.Title}}{{end}}
 {{define "content"}}{{$d := .Data}}
-<p class="text-muted"><a class="underline" href="/assets">Assets</a> / <a class="font-mono underline" href="{{$d.HostHref}}">{{$d.Key.IP}}</a> / <span class="font-mono">{{$d.Key.Port}}/{{$d.Key.Proto}}</span></p>
-<h1 class="mt-1 font-mono text-[17px] font-semibold">{{$d.Title}}{{with $d.Key.VHost}} <span class="text-muted">({{template "cell" (dict "Value" . "Max" 60)}})</span>{{end}} {{template "score" $d.Score}}</h1>
+<p class="text-muted"><a class="underline" href="{{$d.AssetsHref}}">Assets</a> / <a class="font-mono underline" href="{{$d.HostHref}}">{{$d.Key.IP}}</a> / <span class="font-mono">{{$d.Key.Port}}/{{$d.Key.Proto}}</span></p>
+<h1 class="mt-1 font-mono text-[17px] font-semibold">{{$d.Endpoint}}/{{$d.Key.Proto}}{{with $d.Key.VHost}} <span class="text-muted">({{template "cell" (dict "Value" . "Max" 60)}})</span>{{end}} {{template "score" $d.Score}}</h1>
 <p class="text-muted">{{template "cell" (dict "Value" $d.Product "Max" 80)}}</p>
+{{with $d.AsOf}}{{template "asof-banner" .}}{{end -}}
 
 <div class="mt-4 grid gap-3 lg:grid-cols-2">
 <section class="panel" aria-label="Service">

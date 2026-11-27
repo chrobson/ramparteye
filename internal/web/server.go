@@ -62,6 +62,9 @@ type Store interface {
 	Annotation(ctx context.Context, k model.AssetKey) (store.Annotation, error)
 	UpsertAnnotation(ctx context.Context, a store.Annotation) (store.Annotation, error)
 	DeleteAnnotation(ctx context.Context, k model.AssetKey, userID int64) error
+	// The time machine: the inventory as of a finished run.
+	DoneRuns(ctx context.Context, limit int) ([]store.RunSummary, error)
+	AdjacentDoneRuns(ctx context.Context, runID int64) (prev, next int64, err error)
 
 	// Scans, changes, targets and scan profiles.
 	SafetyReceipt(ctx context.Context, runID int64) (safety.Receipt, error)
