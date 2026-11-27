@@ -6,7 +6,7 @@ set -eu
 
 name=${RAMPART_TEST_DB_NAME:-ramparteye-testdb}
 port=${RAMPART_TEST_DB_PORT:-55432}
-image=percona/percona-distribution-postgresql:18.7.1-1
+image=percona/percona-distribution-postgresql:18.7.1-1@sha256:25b6ee7e12e0fb6eb57001b6a89023168b03ae33827e834beb69139b3c092ce7
 root=$(cd "$(dirname "$0")/.." && pwd)
 
 docker rm -f "$name" >/dev/null 2>&1 || true

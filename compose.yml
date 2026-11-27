@@ -17,13 +17,13 @@ name: ramparteye
 
 services:
   keys-init:
-    image: busybox:1.36.1
+    image: busybox:1.36.1@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662
     command: ["sh", "-c", "chown 26:26 /keys && chmod 700 /keys"]
     volumes:
       - pgkeys:/keys
 
   db:
-    image: percona/percona-distribution-postgresql:18.7.1-1
+    image: percona/percona-distribution-postgresql:18.7.1-1@sha256:25b6ee7e12e0fb6eb57001b6a89023168b03ae33827e834beb69139b3c092ce7
     command: ["postgres", "-c", "shared_preload_libraries=pg_tde"]
     depends_on:
       keys-init:
