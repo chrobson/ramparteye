@@ -74,6 +74,9 @@ type fakeStore struct {
 	assets assetData // asset page fixtures
 	scans  scanData  // scans, changes, targets and profile fixtures
 	admin  adminData // signatures and settings fixtures
+
+	// tm holds per-run observations for the time machine.
+	tm map[int64]runFixture
 }
 
 // dashData is what the fake store returns for the dashboard queries.
@@ -428,15 +431,24 @@ func (f *fakeStore) Runs(context.Context, int) ([]store.RunSummary, error) {
 
 func (f *fakeStore) LatestDoneRun(context.Context) (int64, error) { return f.dash.latest, nil }
 
-func (f *fakeStore) Changes(context.Context, int64) ([]model.Change, error) {
+func (f *fakeStore) Changes(_ context.Context, runID int64) ([]model.Change, error) {
+	if r, ok := f.tm[runID]; ok {
+		return r.changes, nil
+	}
 	return f.dash.changes, nil
 }
 
-func (f *fakeStore) RunHostObs(context.Context, int64) ([]model.HostObs, error) {
+func (f *fakeStore) RunHostObs(_ context.Context, runID int64) ([]model.HostObs, error) {
+	if r, ok := f.tm[runID]; ok {
+		return r.hostObs, nil
+	}
 	return f.dash.hostObs, nil
 }
 
-func (f *fakeStore) ExportServices(context.Context, int64) ([]store.ExportService, error) {
+func (f *fakeStore) ExportServices(_ context.Context, runID int64) ([]store.ExportService, error) {
+	if r, ok := f.tm[runID]; ok {
+		return r.services, nil
+	}
 	return f.dash.services, nil
 }
 

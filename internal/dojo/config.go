@@ -4,14 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/chrobson/ramparteye/internal/config"
 	"github.com/chrobson/ramparteye/internal/secret"
 	"github.com/chrobson/ramparteye/internal/store"
+	"github.com/chrobson/ramparteye/internal/urlcheck"
 )
 
 // tokenAAD binds the sealed token to its column so it cannot be replayed
@@ -205,51 +203,19 @@ const maxTokenLen = 512
 // normaliseToken trims a token and rejects control characters and excess
 // length. Errors never include the token.
 func normaliseToken(tok string) (string, error) {
-	tok = strings.TrimSpace(tok)
-	if len(tok) > maxTokenLen {
-		return "", fmt.Errorf("DefectDojo token is longer than %d bytes", maxTokenLen)
-	}
-	if strings.IndexFunc(tok, unicode.IsControl) >= 0 {
-		return "", errors.New("DefectDojo token must not contain control characters")
-	}
-	return tok, nil
+	return secret.Clean(tok, "DefectDojo token", maxTokenLen)
 }
 
 // normaliseURL requires an absolute http(s) URL with a host, an optional valid
-// port and no userinfo, query or fragment. It lowercases scheme and host and
-// strips trailing slashes. Errors are fixed messages: the input may carry
-// credentials and is never echoed.
+// port and no userinfo, query or fragment (see urlcheck.Parse). It lowercases
+// scheme and host and strips trailing slashes. Errors are fixed messages: the
+// input may carry credentials and is never echoed.
 func normaliseURL(raw string) (string, error) {
-	bad := func(why string) (string, error) {
-		return "", errors.New("DefectDojo URL " + why)
-	}
-	raw = strings.TrimSpace(raw)
-	u, err := url.Parse(raw)
+	u, err := urlcheck.Parse(raw, false)
 	if err != nil {
-		return bad("is not a valid URL")
+		return "", errors.New("DefectDojo URL " + err.Error())
 	}
-	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return bad("must be an absolute http or https URL")
-	}
-	if u.Hostname() == "" {
-		return bad("needs a host")
-	}
-	if u.User != nil || strings.Contains(u.Host, "@") {
-		return bad("must not contain credentials")
-	}
-	if u.RawQuery != "" || u.Fragment != "" || strings.ContainsAny(raw, "?#") {
-		return bad("must not contain a query or fragment")
-	}
-	if strings.HasSuffix(u.Host, ":") {
-		return bad("has an empty port")
-	}
-	if p := u.Port(); p != "" {
-		if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
-			return bad("has an invalid port")
-		}
-	}
-	return scheme + "://" + strings.ToLower(u.Host) + strings.TrimRight(u.EscapedPath(), "/"), nil
+	return urlcheck.Origin(u) + strings.TrimRight(u.EscapedPath(), "/"), nil
 }
 
 func orDefault(v, def string) string {

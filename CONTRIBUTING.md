@@ -28,8 +28,9 @@ a short discussion before larger changes saves everybody time.
 
 ## Ground rules
 
-- The safety model is not negotiable: no request methods other than `GET`/`HEAD`, no request
-  bodies, no payloads, nothing outside the configured scope. See
+- The safety model is not negotiable: towards scanned hosts, no request methods other than
+  `GET`/`HEAD`, no request bodies, no payloads, and nothing outside the configured scope. (The
+  DefectDojo push and webhook notifications go only to endpoints the administrator configured.) See
   [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 - English only, in code, comments, UI and docs.
 - No new runtime dependencies without a good reason; no Node.js in the build.

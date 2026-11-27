@@ -11,6 +11,12 @@ type errorData struct {
 	Code  int
 	Title string
 	Text  string
+	Links []ErrorLink // offered before "Back to the dashboard"
+}
+
+// ErrorLink is a way on from an error page.
+type ErrorLink struct {
+	Href, Label string
 }
 
 // renderError writes the themed error page; API and htmx requests get a

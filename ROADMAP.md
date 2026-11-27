@@ -6,8 +6,12 @@ current release.
 
 ## Next
 
-- Pin container base images and GitHub Actions to digests at release time (today they are pinned
-  to version tags).
+- **Per-profile baselines for change detection.** A run is compared with the newest earlier
+  finished scan of any profile, so two profiles with different targets report each other's hosts
+  as new or gone. Comparing a run with the previous run of the same profile fixes that.
+- **Retention.** Runs and their observations are kept forever; a `prune` command and a setting to
+  keep the last N runs or days per profile.
+- **E-mail notifications** (SMTP) next to the webhook, for teams without a chat server.
 
 ## Not in the current release (non-goals for now)
 
@@ -24,7 +28,6 @@ These were consciously left out of the initial version. Some may come later; non
 | **Homebrew formula** | Docker Compose is the supported install path for now. |
 | **Public demo instance** | The demo lab runs locally with one command instead. |
 | **Embedded store** (no separate PostgreSQL) | PostgreSQL with pg_tde stays the only database: one storage path, encrypted at rest. |
-| **Time machine** (browse the whole inventory as of any past run) | Per-host history and run-by-run changes exist; a full point-in-time view does not. |
 
 ## Never
 

@@ -31,6 +31,8 @@ sends the findings to DefectDojo, while staying provably inside the scope you al
   gone") and a changes timeline.
 - **Host drilldown**: state per run, availability by time of day and a weekly heatmap, the
   host's own changes, and its services with detections, score and per-service history.
+- **Time machine**: browse the whole inventory as any finished run saw it, step through runs and
+  compare what was exposed then with what is exposed now.
 - **Transparent interest score** for every service: a sum of named rules (severity, admin panel,
   outdated version, exposed database, TLS problems, new service...), not a black box.
 - **Signatures in YAML**, 41 built in (admin panels, CMSs, management APIs, TLS problems, outdated
@@ -43,6 +45,12 @@ sends the findings to DefectDojo, while staying provably inside the scope you al
   [docs/SECURITY-MODEL.md](docs/SECURITY-MODEL.md).
 - **DefectDojo from the UI**: connection test, auto-push after every scan, reimport without
   duplicates, push history and a status chip. See [docs/DEFECTDOJO.md](docs/DEFECTDOJO.md).
+- **Webhook notifications**: after a scan, a summary of what changed goes to a webhook you
+  configure, as signed JSON for a SIEM or automation, or as a Slack-compatible message (also
+  Mattermost and Rocket.Chat). See [docs/NOTIFICATIONS.md](docs/NOTIFICATIONS.md).
+- **Monitoring**: `/healthz` for container and uptime checks and a token-protected Prometheus
+  `/metrics` endpoint with aggregate counts only, so alerts can fire when scans stop, a safety
+  check fails or pushes break. See [docs/MONITORING.md](docs/MONITORING.md).
 - **Two-phase nmap scanning** (discovery, then service detection) split into chunks across
   workers, with retries, pause/resume at window end and live progress over SSE.
 - **Roles and audit log**: Admin, Operator, Analyst and Viewer, custom roles, analyst notes and
@@ -174,13 +182,16 @@ change detection, a provable safety budget and DefectDojo. How it relates to wel
   proxy.
 - [Security model](docs/SECURITY-MODEL.md): scope, intensity, safety receipt, keys, legal note.
 - [DefectDojo](docs/DEFECTDOJO.md): mapping, deduplication, push history.
+- [Notifications](docs/NOTIFICATIONS.md): webhook setup, payload, signature verification.
+- [Monitoring](docs/MONITORING.md): `/healthz`, Prometheus metrics, example alerts.
 - [Signatures](docs/SIGNATURES.md): the YAML format and the nuclei import.
 - [Development](docs/DEVELOPMENT.md): building, tests, CSS, the lab.
 - [Contributing](CONTRIBUTING.md) and [reporting vulnerabilities](SECURITY.md).
 
 ## Roadmap
 
-What is planned and what is deliberately out of scope: [ROADMAP.md](ROADMAP.md).
+What is planned and what is deliberately out of scope: [ROADMAP.md](ROADMAP.md). What changed in each
+release: [CHANGELOG.md](CHANGELOG.md).
 
 ## Origins
 

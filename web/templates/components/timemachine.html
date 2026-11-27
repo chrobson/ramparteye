@@ -1,0 +1,16 @@
+{{/* Time machine banner of a page showing a past run. Data: *AsOf. */}}
+{{define "asof-banner"}}<section class="asof mt-3" role="status" aria-label="Time machine">
+<p><span class="text-base font-semibold">Inventory as of run #{{.RunID}}</span>{{if .Import}} <span class="tag tag-changed">import</span>{{end}} · <a class="text-xs underline" href="/scans/{{.RunID}}">run details</a></p>
+<p class="mt-1">{{with .Profile}}Profile <b>{{template "cell" (dict "Value" . "Max" 60)}}</b> · {{end}}finished {{with .When}}{{.}} ({{ago $.FinishedAt}}){{else}}at an unknown time{{end}}{{if not .NewerID}} · the newest finished run{{end}}.
+You are looking at what run #{{.RunID}} saw, not today's inventory.{{with .Narrow}} {{.}}{{end}}</p>
+<p class="mt-1 text-muted">{{if not .Compared}}This run was not compared with an earlier one, so nothing is marked new.
+{{else if .BaseRunID}}"New" means new compared with run #{{.BaseRunID}} (<a class="underline" href="/changes/{{.RunID}}">changes in this run</a>).
+{{else}}This run is the baseline: there was no earlier run to compare with, so nothing is marked new.{{end}}
+Host state is what this run observed (up = answered); analyst annotations are today's.</p>
+<div class="mt-2 flex flex-wrap items-center gap-2">
+{{with .OlderHref}}<a class="btn btn-sm" href="{{.}}">← Older run #{{$.OlderID}}</a>{{end}}
+{{with .NewerHref}}<a class="btn btn-sm" href="{{.}}">Newer run #{{$.NewerID}} →</a>{{end}}
+<a class="btn btn-sm btn-primary" href="{{.LatestHref}}">Back to latest</a>
+{{if .CanExport}}<span class="text-xs text-muted">Export this run: <a class="underline" href="/exchange/export.csv?run={{.RunID}}">CSV</a> · <a class="underline" href="/exchange/export.json?run={{.RunID}}">JSON</a></span>{{end}}
+</div>
+</section>{{end}}

@@ -43,9 +43,10 @@ func cmdServe(e *env, args []string) int {
 	return exitOK
 }
 
-// serve runs the web UI, the scheduler and the DefectDojo pusher until
-// e.ctx is done, then shuts down: scans pause, the HTTP server drains,
-// the runner stops and the pusher closes, in that order.
+// serve runs the web UI, the scheduler, the DefectDojo pusher and the
+// webhook notifier until e.ctx is done, then shuts down: scans pause, the
+// HTTP server drains, the runner stops, the pusher and then the notifier
+// close, in that order.
 func serve(e *env, cfg config.Config, log *slog.Logger) error {
 	ctx := e.ctx
 	box, created, err := loadBox(&cfg, true)
@@ -126,6 +127,8 @@ func serve(e *env, cfg config.Config, log *slog.Logger) error {
 		loopDone:    loopDone,
 		waitRuns:    s.runner.Wait,
 		closePusher: s.pusher.Close,
+		// Appended: the notifier closes after the pusher.
+		closeNotifier: s.notifier.Close,
 	})
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
@@ -147,6 +150,8 @@ func serveDeps(runCtx context.Context, pool *pgxpool.Pool, st *store.Store, s *s
 		Resolver:    target.Resolver(config.DefaultResolver),
 		ShutdownCtx: runCtx,
 		Box:         box,
+		Monitor:     st,
+		Version:     version,
 		SignaturesChanged: func() {
 			ctx, cancel := context.WithTimeout(runCtx, 30*time.Second)
 			defer cancel()
@@ -154,6 +159,7 @@ func serveDeps(runCtx context.Context, pool *pgxpool.Pool, st *store.Store, s *s
 				log.Error("reload signatures", "err", err)
 			}
 		},
+		Notifier: s.notifier,
 	}
 }
 

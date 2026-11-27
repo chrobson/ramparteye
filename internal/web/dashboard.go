@@ -11,10 +11,10 @@ import (
 	"strings"
 
 	"github.com/chrobson/ramparteye/internal/auth"
-	"github.com/chrobson/ramparteye/internal/dojo"
 	"github.com/chrobson/ramparteye/internal/interest"
 	"github.com/chrobson/ramparteye/internal/model"
 	"github.com/chrobson/ramparteye/internal/store"
+	"github.com/chrobson/ramparteye/internal/summary"
 	"github.com/chrobson/ramparteye/internal/target"
 )
 
@@ -22,8 +22,8 @@ import (
 const maxAddrsShown = 1e15 // display cap of the address count
 
 const (
-	reviewMin      = 30 // interest score from which a service is listed
-	urgentMin      = 60 // "high" priority: needs attention now
+	reviewMin      = 30                // interest score from which a service is listed
+	urgentMin      = summary.UrgentMin // "high" priority: needs attention now
 	reviewListLen  = 5
 	changesListLen = 6
 	runsLookback   = 10
@@ -103,42 +103,15 @@ func Headline(d DashboardData) (title, sub string) {
 	case !d.HasDoneRun:
 		return "No finished scans yet.", "Results appear here when a scan finishes."
 	}
-	var parts []string
-	if d.NewServices > 0 {
-		parts = append(parts, plural(d.NewServices, "new exposure", "new exposures"))
-	}
-	if d.HostsGone > 0 {
-		parts = append(parts, plural(d.HostsGone, "host", "hosts")+" gone")
-	}
-	if d.Changed > 0 {
-		parts = append(parts, plural(d.Changed, "service", "services")+" changed")
-	}
-	if len(parts) == 0 {
-		title = "No changes since the last scan."
-	} else {
-		title = "Since the last scan: " + joinCommaAnd(parts) + "."
-	}
-	if d.Urgent == 0 {
-		sub = "Nothing needs urgent attention."
-	} else {
-		sub = plural(d.Urgent, "service needs", "services need") + " attention first."
-	}
+	title, sub = summary.Headline(summary.Counts{NewHosts: d.NewHosts, HostsGone: d.HostsGone,
+		NewServices: d.NewServices, ServicesGone: d.ServicesGone, Changed: d.Changed, Unstable: d.Unstable}, d.Urgent)
 	if d.LastScan != "" {
 		sub += " " + d.LastScan
 	}
 	return title, sub
 }
 
-func plural(n int, one, many string) string {
-	if n == 1 {
-		return "1 " + one
-	}
-	return strconv.Itoa(n) + " " + many
-}
-
-// joinCommaAnd joins parts with ", " (the list reads "A, B, C"; the
-// sentence stays short).
-func joinCommaAnd(parts []string) string { return strings.Join(parts, ", ") }
+func plural(n int, one, many string) string { return summary.Plural(n, one, many) }
 
 func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	d, err := s.loadDashboard(r.Context())
@@ -205,24 +178,9 @@ func (s *Server) loadRunPart(ctx context.Context, d *DashboardData, runID int64)
 	if err != nil {
 		return fmt.Errorf("changes: %w", err)
 	}
-	kinds := map[model.AssetKey][]string{}
-	for _, c := range changes {
-		switch c.Kind {
-		case model.ChangeNew:
-			d.NewServices++
-		case model.ChangeGone:
-			d.ServicesGone++
-		case model.ChangeChanged:
-			d.Changed++
-		case model.ChangeHostUp:
-			d.NewHosts++
-		case model.ChangeHostDown:
-			d.HostsGone++
-		case model.ChangeUnstable:
-			d.Unstable++
-		}
-		kinds[c.Key] = append(kinds[c.Key], string(c.Kind))
-	}
+	c := summary.CountChanges(changes)
+	d.NewHosts, d.HostsGone, d.NewServices, d.ServicesGone, d.Changed, d.Unstable =
+		c.NewHosts, c.HostsGone, c.NewServices, c.ServicesGone, c.Changed, c.Unstable
 	for i, c := range changes {
 		if i == changesListLen {
 			break
@@ -278,20 +236,16 @@ func (s *Server) loadRunPart(ctx context.Context, d *DashboardData, runID int64)
 	if err != nil {
 		return fmt.Errorf("annotations: %w", err)
 	}
-	type scored struct {
-		item  ServiceItem
-		admin bool
-	}
-	var all []scored
-	for _, sv := range svcs {
-		in := interestInput(sv, kinds[sv.Key], unstableSet[sv.Key.IP.Unmap()], notes[sv.Key])
-		res := interest.Score(in)
-		it := serviceItem(sv, res.Score)
-		all = append(all, scored{item: it})
-		if res.Score >= urgentMin {
+	// Ranked highest score first, so both lists come out in score order.
+	for _, rk := range summary.Rank(svcs, summary.ChangeKinds(changes), unstableSet, notes) {
+		it := serviceItem(rk.Service, rk.Score)
+		if rk.Score >= urgentMin {
 			d.Urgent++
 		}
-		for _, det := range sv.Detections {
+		if rk.Score >= reviewMin && len(d.Review) < reviewListLen {
+			d.Review = append(d.Review, it)
+		}
+		for _, det := range rk.Service.Detections {
 			if det.Category == "admin-panel" || det.Category == "staging" {
 				n := it
 				n.Name, n.Detail = det.Name, strings.ReplaceAll(det.Category, "-", " ")
@@ -300,46 +254,16 @@ func (s *Server) loadRunPart(ctx context.Context, d *DashboardData, runID int64)
 			}
 		}
 	}
-	sort.SliceStable(all, func(i, j int) bool { return all[i].item.Score > all[j].item.Score })
-	for _, a := range all {
-		if a.item.Score < reviewMin || len(d.Review) == reviewListLen {
-			break
-		}
-		d.Review = append(d.Review, a.item)
-	}
-	sort.SliceStable(d.Interesting, func(i, j int) bool { return d.Interesting[i].Score > d.Interesting[j].Score })
 	if len(d.Interesting) > reviewListLen {
 		d.Interesting = d.Interesting[:reviewListLen]
 	}
 	return nil
 }
 
-// interestInput maps a stored service to the scoring input. A detection
-// without its own severity gets the DefectDojo export's default. The nmap
-// service name is kept in Banner.
+// interestInput maps a stored service to the scoring input (see
+// summary.InterestInput).
 func interestInput(sv store.ExportService, kinds []string, unstable bool, note store.Annotation) interest.Input {
-	in := interest.Input{Port: int(sv.Key.Port), Proto: sv.Key.Proto, Service: sv.Banner, Product: sv.Product,
-		ChangeKinds: kinds, HostUnstable: unstable, AnalystSeverity: note.Severity, FalsePositive: note.FalsePositive}
-	if sv.HTTP != nil {
-		switch {
-		case strings.HasPrefix(sv.HTTP.URL, "https:"):
-			in.Scheme = "https"
-		case strings.HasPrefix(sv.HTTP.URL, "http:"):
-			in.Scheme = "http"
-		}
-	}
-	for _, d := range sv.Detections {
-		switch d.SignatureID {
-		case "tls-expired":
-			in.TLSExpired = true
-		case "tls-self-signed":
-			in.TLSSelfSigned = true
-		}
-		in.Detections = append(in.Detections, interest.Detection{Signature: d.SignatureID, Name: d.Name,
-			Category: d.Category, Severity: string(dojo.DetectionSeverity(d)), Confidence: d.Confidence,
-			Outdated: d.Evidence["outdated"]})
-	}
-	return in
+	return summary.InterestInput(sv, kinds, unstable, note)
 }
 
 var severityRank = map[model.Severity]int{model.SevInfo: 0, model.SevLow: 1, model.SevMedium: 2,
@@ -348,11 +272,9 @@ var severityRank = map[model.Severity]int{model.SevInfo: 0, model.SevLow: 1, mod
 func serviceItem(sv store.ExportService, score int) ServiceItem {
 	it := ServiceItem{Endpoint: endpoint(sv.Key), Score: score, Severity: model.SevInfo,
 		Name: strings.TrimSpace(sv.Product), Detail: sv.Banner}
-	for i, d := range sv.Detections {
-		if sev := dojo.DetectionSeverity(d); i == 0 || severityRank[sev] > severityRank[it.Severity] {
-			it.Severity = sev
-			it.Name, it.Detail = d.Name, strings.ReplaceAll(d.Category, "-", " ")
-		}
+	if i, sev := summary.Strongest(sv.Detections); i >= 0 {
+		d := sv.Detections[i]
+		it.Severity, it.Name, it.Detail = sev, d.Name, strings.ReplaceAll(d.Category, "-", " ")
 	}
 	if it.Name == "" {
 		it.Name = sv.Banner

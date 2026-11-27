@@ -1,7 +1,15 @@
-{{define "title"}}Assets{{end}}
+{{define "title"}}Assets{{with .Data.AsOf}} as of run #{{.RunID}}{{end}}{{end}}
 {{define "content"}}{{$d := .Data}}
-<h1 class="page-title">Assets</h1>
+<div class="flex flex-wrap items-end justify-between gap-3">
+<h1 class="page-title">Assets{{with $d.AsOf}} <span class="text-med">as of run #{{.RunID}}</span>{{end}}</h1>
+{{if $d.Picker}}<form class="flex flex-wrap items-end gap-2" method="get" action="/assets" aria-label="Time machine">
+<label><span class="lbl">Inventory as of</span><select name="run" class="input"><option value=""{{if not $d.AsOf}} selected{{end}}>Latest</option>{{range $d.Picker}}<option value="{{.ID}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+{{range $d.Keep}}<input type="hidden" name="{{.K}}" value="{{.V}}">{{end}}<button type="submit" class="btn">Show</button>
+</form>{{end}}
+</div>
+{{with $d.AsOf}}{{template "asof-banner" .}}{{end -}}
 <form class="panel mt-4" method="get" action="/assets" hx-get="/assets" hx-target="#assets-results" hx-swap="innerHTML" hx-push-url="true" hx-trigger="submit">
+{{with $d.AsOf}}<input type="hidden" name="run" value="{{.RunID}}">{{end -}}
 <div class="flex flex-wrap items-end gap-3">
 <label class="grow basis-48"><span class="lbl">Search</span><input id="asset-q" type="search" hx-get="/assets" hx-trigger="keyup changed delay:300ms" hx-include="closest form" name="q" maxlength="200" class="input" value="{{$d.Filter.Text}}" placeholder="address, host name, product, detection"></label>
 <label><span class="lbl">State</span><select name="state" class="input" hx-get="/assets" hx-trigger="change" hx-include="closest form"><option value="">Any</option>{{range $d.States}}<option value="{{.}}"{{if eq . $d.Filter.State}} selected{{end}}>{{.}}</option>{{end}}</select></label>
@@ -19,15 +27,16 @@
 {{/* The result table; also the htmx fragment. */}}
 {{define "assets-results"}}{{$d := .Data}}{{if $d.Error}}<p role="alert" class="alert-error">{{$d.Error}}</p>{{else if $d.Rows}}<p class="mb-2 text-muted">{{num $d.Total}} host{{if ne $d.Total 1}}s{{end}}{{if gt $d.Total $d.Limit}}, the first {{num $d.Limit}} shown. Narrow the filters to see the rest.{{end}}</p>
 <div class="overflow-x-auto"><table class="tbl">
-<thead><tr><th>Host</th><th>State</th><th>Services</th><th>Top finding</th><th>Score</th><th>Last seen</th></tr></thead>
+<thead><tr><th>Host</th><th>{{with $d.AsOf}}State in run #{{.RunID}}{{else}}State{{end}}</th><th>Services</th><th>Top finding</th><th>Score</th>{{if not $d.AsOf}}<th>Last seen</th>{{end}}</tr></thead>
 <tbody>{{range $d.Rows}}<tr>
-<td><a class="font-mono text-brand-fg underline" href="/assets/{{.IP}}">{{.IP}}</a>{{if .Hostname}}<div class="text-xs text-muted">{{template "cell" (dict "Value" .Hostname "Max" 60)}}</div>{{end}}</td>
+<td><a class="font-mono text-brand-fg underline" href="{{.Href}}">{{.IP}}</a>{{if .Hostname}}<div class="text-xs text-muted">{{template "cell" (dict "Value" .Hostname "Max" 60)}}</div>{{end}}</td>
 <td><span class="tag {{.StateClass}} ml-0">{{.State}}</span>{{if .Noted}} <span class="tag bg-info-bg text-fg" title="Has an analyst annotation">note</span>{{end}}</td>
 <td class="font-mono">{{.Services}}</td>
 <td>{{if .Top}}{{template "cell" (dict "Value" .Top "Max" 40)}} {{template "sev" .TopSev}}{{else}}<span class="text-dim">–</span>{{end}}</td>
 <td>{{if .Services}}{{template "score" .Score}}{{else}}<span class="text-dim">–</span>{{end}}</td>
-<td class="text-muted">{{ago .LastSeen}}</td>
+{{if not $d.AsOf}}<td class="text-muted">{{ago .LastSeen}}</td>{{end}}
 </tr>{{end}}</tbody></table></div>
-{{else}}{{if $d.Filtered}}{{template "empty" (dict "Title" "No assets match" "Text" "No host matches these filters. Clear a filter to see more.")}}
+{{else}}{{if $d.AsOf}}{{template "empty" (dict "Title" (printf "No hosts in run #%d" $d.AsOf.RunID) "Text" (or (and $d.Filtered "No host of this run matches these filters. Clear a filter to see more.") "This run saw no hosts."))}}
+{{else if $d.Filtered}}{{template "empty" (dict "Title" "No assets match" "Text" "No host matches these filters. Clear a filter to see more.")}}
 {{else if $d.HasRun}}{{template "empty" (dict "Title" "No assets yet" "Text" "No hosts are tracked yet.")}}
 {{else}}{{template "empty" (dict "Title" "No assets yet" "Text" "Hosts appear here after the first scan finishes." "Href" "/scans" "Link" "Go to Scans")}}{{end}}{{end}}{{end}}

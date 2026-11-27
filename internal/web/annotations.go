@@ -40,6 +40,11 @@ type AnnotationForm struct {
 	UpdatedAt     time.Time
 	Error         string
 	Severities    []model.Severity
+	// AsOfRun is set on a time machine page: annotations are current, so
+	// the form is read-only there and EditHref (when the user may edit)
+	// leads to the latest view.
+	AsOfRun  int64
+	EditHref string
 }
 
 func annotationAction(k model.AssetKey, suffix string) string {
@@ -61,6 +66,18 @@ func newAnnotationForm(ctx context.Context, k model.AssetKey, a store.Annotation
 		f.Severity, f.FalsePositive, f.UpdatedAt = a.Severity, a.FalsePositive, a.UpdatedAt
 	}
 	return f
+}
+
+// readOnlyAsOf makes the form read-only on a time machine page (asOf set).
+func (f *AnnotationForm) readOnlyAsOf(k model.AssetKey, asOf *AsOf) {
+	if asOf == nil {
+		return
+	}
+	f.AsOfRun = asOf.RunID
+	if f.CanEdit {
+		f.EditHref = assetPath(k) + "#annotation"
+	}
+	f.CanEdit = false
 }
 
 // annotationFor returns the form of key: the stored annotation, or form's

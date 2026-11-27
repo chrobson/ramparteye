@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -112,11 +113,17 @@ type AssetsData struct {
 	HasRun   bool
 	Filtered bool
 	Error    string // inline message for an invalid filter (htmx requests)
+	// The time machine: AsOf is set when the list shows a past run; Picker
+	// offers the recent finished runs, Keep the filters it carries along.
+	AsOf   *AsOf
+	Picker []RunOption
+	Keep   []KV
 }
 
 // AssetRow is a host on the asset list.
 type AssetRow struct {
 	IP         string
+	Href       string
 	Hostname   string
 	State      model.HostStateKind
 	StateClass string
@@ -152,8 +159,7 @@ type snapshot struct {
 // their scores, and the notes. A failing query fails the page.
 func (s *Server) loadSnapshot(ctx context.Context) (snapshot, error) {
 	st := s.d.Store
-	snap := snapshot{Hostnames: map[netip.Addr]string{}, Services: map[netip.Addr][]scoredService{},
-		NewHosts: map[netip.Addr]bool{}}
+	snap := newSnapshot()
 	var err error
 	if snap.States, err = st.HostStates(ctx, ""); err != nil {
 		return snap, fmt.Errorf("host states: %w", err)
@@ -161,27 +167,68 @@ func (s *Server) loadSnapshot(ctx context.Context) (snapshot, error) {
 	if snap.RunID, err = st.LatestDoneRun(ctx); err != nil {
 		return snap, fmt.Errorf("latest run: %w", err)
 	}
-	var ips []netip.Addr
 	unstable := map[netip.Addr]bool{}
 	for _, h := range snap.States {
-		ip := h.IP.Unmap()
-		ips = append(ips, ip)
-		unstable[ip] = h.State == model.HostUnstable
+		unstable[h.IP.Unmap()] = h.State == model.HostUnstable
 	}
-	if snap.Notes, err = st.AnnotationsByIPs(ctx, ips); err != nil {
-		return snap, fmt.Errorf("annotations: %w", err)
+	if err := s.loadNotes(ctx, &snap); err != nil {
+		return snap, err
+	}
+	if snap.RunID == 0 {
+		return snap, nil
+	}
+	changes, hosts, svcs, err := s.loadRunObs(ctx, snap.RunID)
+	if err != nil {
+		return snap, err
+	}
+	snap.addRun(changes, hosts, svcs, unstable)
+	return snap, nil
+}
+
+func newSnapshot() snapshot {
+	return snapshot{Hostnames: map[netip.Addr]string{}, Services: map[netip.Addr][]scoredService{},
+		NewHosts: map[netip.Addr]bool{}}
+}
+
+// loadNotes loads the annotations of the snapshot's hosts.
+func (s *Server) loadNotes(ctx context.Context, snap *snapshot) error {
+	ips := make([]netip.Addr, 0, len(snap.States))
+	for _, h := range snap.States {
+		ips = append(ips, h.IP.Unmap())
+	}
+	var err error
+	if snap.Notes, err = s.d.Store.AnnotationsByIPs(ctx, ips); err != nil {
+		return fmt.Errorf("annotations: %w", err)
 	}
 	snap.Noted = map[netip.Addr]bool{}
 	for k := range snap.Notes {
 		snap.Noted[k.IP.Unmap()] = true
 	}
-	if snap.RunID == 0 {
-		return snap, nil
-	}
-	changes, err := st.Changes(ctx, snap.RunID)
+	return nil
+}
+
+// loadRunObs loads the changes, host observations and services of a run.
+func (s *Server) loadRunObs(ctx context.Context, runID int64) ([]model.Change, []model.HostObs, []store.ExportService, error) {
+	st := s.d.Store
+	changes, err := st.Changes(ctx, runID)
 	if err != nil {
-		return snap, fmt.Errorf("changes: %w", err)
+		return nil, nil, nil, fmt.Errorf("changes: %w", err)
 	}
+	hosts, err := st.RunHostObs(ctx, runID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("host observations: %w", err)
+	}
+	svcs, err := st.ExportServices(ctx, runID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("services: %w", err)
+	}
+	return changes, hosts, svcs, nil
+}
+
+// addRun adds the host names and the scored services of a run; unstable
+// marks the hosts that count as unstable in the score. Notes must be loaded.
+func (snap *snapshot) addRun(changes []model.Change, hosts []model.HostObs, svcs []store.ExportService,
+	unstable map[netip.Addr]bool) {
 	kinds := map[model.AssetKey][]string{}
 	for _, c := range changes {
 		kinds[c.Key] = append(kinds[c.Key], string(c.Kind))
@@ -189,18 +236,10 @@ func (s *Server) loadSnapshot(ctx context.Context) (snapshot, error) {
 			snap.NewHosts[c.Key.IP.Unmap()] = true
 		}
 	}
-	hosts, err := st.RunHostObs(ctx, snap.RunID)
-	if err != nil {
-		return snap, fmt.Errorf("host observations: %w", err)
-	}
 	for _, h := range hosts {
 		if h.Hostname != "" {
 			snap.Hostnames[h.IP.Unmap()] = h.Hostname
 		}
-	}
-	svcs, err := st.ExportServices(ctx, snap.RunID)
-	if err != nil {
-		return snap, fmt.Errorf("services: %w", err)
 	}
 	for _, sv := range svcs {
 		ip := sv.Key.IP.Unmap()
@@ -212,7 +251,6 @@ func (s *Server) loadSnapshot(ctx context.Context) (snapshot, error) {
 			snap.Hostnames[ip] = sv.Hostname
 		}
 	}
-	return snap, nil
 }
 
 // hostMatches reports whether a host passes the filter.
@@ -276,15 +314,16 @@ func maxScore(svcs []scoredService) int {
 	return m
 }
 
-// assetRows builds the filtered, sorted list rows.
-func (snap snapshot) assetRows(f assetFilter) (rows []AssetRow, total int) {
+// assetRows builds the filtered, sorted list rows; host links are as of
+// run (0 = the latest view).
+func (snap snapshot) assetRows(f assetFilter, run int64) (rows []AssetRow, total int) {
 	for _, h := range snap.States {
 		if !snap.hostMatches(h, f) {
 			continue
 		}
 		ip := h.IP.Unmap()
-		row := AssetRow{IP: ip.String(), Hostname: snap.Hostnames[ip], State: h.State,
-			StateClass: stateClass(h.State), LastSeen: h.LastSeen, Services: len(snap.Services[ip])}
+		row := AssetRow{IP: ip.String(), Href: assetPathAt(model.AssetKey{IP: ip}, run), Hostname: snap.Hostnames[ip],
+			State: h.State, StateClass: stateClass(h.State), LastSeen: h.LastSeen, Services: len(snap.Services[ip])}
 		for _, sv := range snap.Services[ip] {
 			if sv.Result.Score >= row.Score && (row.Top == "" || sv.Result.Score > row.Score) {
 				row.Score, row.Top, row.TopSev = sv.Result.Score, sv.Item.Name, sv.Sev
@@ -321,18 +360,32 @@ func (s *Server) assetsList(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Vary", "HX-Request")
 	f, err := parseAssetFilter(r.URL.Query())
 	htmx := r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-History-Restore-Request") == ""
-	if err != nil && htmx {
-		msg := strings.TrimPrefix(err.Error(), errBadFilter.Error()+": ")
-		s.renderFragment(w, r, "assets", "assets-results", AssetsData{Error: "Invalid filter: " + msg + ".",
+	var asOf *AsOf
+	if err == nil {
+		asOf, err = s.requestAsOf(r, func(run int64) string { return assetsPathAt(f.values(), run) })
+	}
+	if err == nil && asOf != nil && f.State != "" && f.State != model.HostUp && f.State != model.HostDown {
+		err = fmt.Errorf("%w: a past run tells only whether a host answered (up or down)", errBadFilter)
+	}
+	var re *runError
+	switch {
+	case err != nil && htmx && (errors.Is(err, errBadFilter) || errors.As(err, &re)):
+		msg := "Invalid filter: " + strings.TrimPrefix(err.Error(), errBadFilter.Error()+": ") + "."
+		if re != nil {
+			msg = re.text
+		}
+		s.renderFragment(w, r, "assets", "assets-results", AssetsData{Error: msg,
 			Quick: quickFilters, States: hostStateFilters, Limit: assetsLimit})
 		return
-	}
-	if err != nil {
+	case errors.Is(err, errBadFilter):
 		s.renderError(w, r, errorData{Code: http.StatusBadRequest, Title: "Invalid filter",
 			Text: "One of the filters is not valid. Clear the filters and try again."})
 		return
+	case err != nil:
+		s.runErrorPage(w, r, err)
+		return
 	}
-	snap, err := s.loadSnapshot(r.Context())
+	snap, err := s.snapshotAsOf(r.Context(), asOf)
 	if err != nil {
 		s.log.Error("load assets", "err", err)
 		s.serverError(w, r)
@@ -340,11 +393,29 @@ func (s *Server) assetsList(w http.ResponseWriter, r *http.Request) {
 	}
 	d := AssetsData{Title: "Assets", Filter: f, Quick: quickFilters, States: hostStateFilters,
 		HasRun: snap.RunID != 0, Limit: assetsLimit,
-		Filtered: f != assetFilter{}}
-	d.Rows, d.Total = snap.assetRows(f)
+		Filtered: f != assetFilter{}, AsOf: asOf}
+	if asOf != nil {
+		d.States = runStateFilters
+	}
+	d.Rows, d.Total = snap.assetRows(f, asOf.run())
 	if htmx {
 		s.renderFragment(w, r, "assets", "assets-results", d)
 		return
+	}
+	if d.Picker, err = s.runPicker(r.Context(), asOf); err != nil {
+		s.log.Error("load assets", "err", err)
+		s.serverError(w, r)
+		return
+	}
+	// The picker carries the filters along, except a state a past run cannot tell.
+	keep := f.values()
+	if !slices.Contains(runStateFilters, f.State) {
+		keep.Del("state")
+	}
+	for _, k := range []string{"q", "state", "min", "quick"} {
+		if v := keep.Get(k); v != "" {
+			d.Keep = append(d.Keep, KV{k, v})
+		}
 	}
 	s.render(w, r, "assets", d)
 }

@@ -16,11 +16,11 @@ services:
   bb-http:
     command: ["sh", "-c", "httpd -p 8000 -h /www && exec httpd -f -v -p 80 -h /www"]
   apache:
-    image: httpd:2.4.62-alpine
+    image: httpd:2.4.62-alpine@sha256:88c55a4fcc1df6cf9e7b38360fb6a6feb4d5c5cf5a27a9ff38096ae585af707f
   legacy-ssh:
     command: ["/lab/banner.sh", "22", "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"]
   intranet:
-    image: httpd:2.4.62-alpine
+    image: httpd:2.4.62-alpine@sha256:88c55a4fcc1df6cf9e7b38360fb6a6feb4d5c5cf5a27a9ff38096ae585af707f
     configs:
       - { source: www-intranet, target: /usr/local/apache2/htdocs/index.html }
     networks:

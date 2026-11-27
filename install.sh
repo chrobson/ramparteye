@@ -242,6 +242,9 @@ RAMPART_TZ=UTC
 #RAMPART_TRUSTED_PROXIES=
 # AES-GCM key for stored secrets (default: generated into the secrets volume).
 #RAMPART_SECRET_KEY=
+# Token for GET /metrics (Prometheus), at least 16 characters, for example
+# from: openssl rand -hex 32. Empty: the endpoint is disabled.
+#RAMPART_METRICS_TOKEN=
 # DefectDojo (the Settings page is the alternative; env values are read-only there).
 #RAMPART_DOJO_URL=
 #RAMPART_DOJO_TOKEN=

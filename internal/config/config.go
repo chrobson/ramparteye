@@ -24,6 +24,8 @@ const (
 	DefaultSecretsDir        = "/var/lib/ramparteye/secrets"
 	DefaultDojoProductType   = "RampartEye"
 	DefaultDojoEngagement    = "Continuous discovery"
+	// MinMetricsTokenLen is the shortest RAMPART_METRICS_TOKEN accepted.
+	MinMetricsTokenLen = 16
 )
 
 // Config is the process configuration. There is no default scan scope:
@@ -69,6 +71,10 @@ type Config struct {
 
 	DojoAutoPush     bool // RAMPART_DOJO_AUTO_PUSH, default true
 	DojoCloseMissing bool // RAMPART_DOJO_CLOSE_MISSING, default false
+
+	// MetricsToken is the bearer token of GET /metrics
+	// (RAMPART_METRICS_TOKEN); empty = the endpoint does not exist.
+	MetricsToken string `json:"-"`
 }
 
 // redacted returns c without methods and with secrets masked.
@@ -82,6 +88,7 @@ func (c Config) redacted() any {
 		return ""
 	}
 	p.DojoToken = mask(c.DojoToken != "")
+	p.MetricsToken = mask(c.MetricsToken != "")
 	p.SecretKey = nil
 	if len(c.SecretKey) > 0 {
 		p.SecretKey = []byte("[redacted]")
@@ -89,7 +96,7 @@ func (c Config) redacted() any {
 	return p
 }
 
-// String formats c with secrets (API token, secret key) masked.
+// String formats c with secrets (API tokens, secret key) masked.
 func (c Config) String() string { return fmt.Sprintf("%+v", c.redacted()) }
 
 // GoString is String for %#v.
@@ -244,6 +251,11 @@ func Load(env func(string) string) (Config, error) {
 	if c.HTTPRetries < 0 || c.HTTPRetries > 3 {
 		return c, fmt.Errorf("RAMPART_HTTP_RETRIES must be 0-3")
 	}
+	if c.MetricsToken = env("RAMPART_METRICS_TOKEN"); c.MetricsToken != "" {
+		if err := checkMetricsToken(c.MetricsToken); err != nil {
+			return c, fmt.Errorf("RAMPART_METRICS_TOKEN: %w", err)
+		}
+	}
 	if k := env("RAMPART_SECRET_KEY"); k != "" {
 		if c.SecretKey, err = parseHexKey(k); err != nil {
 			return c, fmt.Errorf("RAMPART_SECRET_KEY: %w", err)
@@ -370,6 +382,21 @@ func ParseAddrs(s string) ([]netip.Addr, error) {
 		out = append(out, a.Unmap().WithZone(""))
 	}
 	return out, nil
+}
+
+// checkMetricsToken accepts printable ASCII without spaces, so the token
+// survives an HTTP header and a .env file unchanged. The message never
+// contains the value.
+func checkMetricsToken(tok string) error {
+	for i := 0; i < len(tok); i++ {
+		if tok[i] <= ' ' || tok[i] > '~' {
+			return fmt.Errorf("must be printable ASCII without spaces")
+		}
+	}
+	if len(tok) < MinMetricsTokenLen {
+		return fmt.Errorf("must be at least %d characters (for example: openssl rand -hex 32)", MinMetricsTokenLen)
+	}
+	return nil
 }
 
 func parseHexKey(s string) ([]byte, error) {

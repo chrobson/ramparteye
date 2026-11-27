@@ -57,10 +57,11 @@ log "fresh stack ($COMPOSE_PROJECT_NAME), lab variant run1"
 "${DC[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 lab/change.sh run1
 for _ in $(seq 1 60); do
-	curl -fsS -o /dev/null "$BASE/login" 2>/dev/null && break
+	curl -fsS -o /dev/null "$BASE/healthz" 2>/dev/null && break
 	sleep 2
 done
-curl -fsS -o /dev/null "$BASE/login" || fail "login page not reachable at $BASE"
+curl -fsS -o /dev/null "$BASE/healthz" || fail "health check failed at $BASE/healthz"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/metrics")" = 404 ] || fail "/metrics is served without a token"
 
 log "demo accounts in the log"
 "${DC[@]}" logs --no-log-prefix app >"$OUT/app.log"

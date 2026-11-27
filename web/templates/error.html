@@ -3,5 +3,5 @@
 <p class="font-mono text-3xl font-bold text-brand-fg">{{.Data.Code}}</p>
 <h1 class="mt-2 text-lg font-semibold">{{.Data.Title}}</h1>
 <p class="mt-1 text-muted">{{.Data.Text}}</p>
-<a class="btn mt-4" href="/">Back to the dashboard</a>
+<div class="mt-4 flex flex-wrap justify-center gap-2">{{range .Data.Links}}<a class="btn" href="{{.Href}}">{{.Label}}</a>{{end}}<a class="btn" href="/">Back to the dashboard</a></div>
 </section>{{end}}

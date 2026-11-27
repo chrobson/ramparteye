@@ -62,6 +62,9 @@ type Store interface {
 	Annotation(ctx context.Context, k model.AssetKey) (store.Annotation, error)
 	UpsertAnnotation(ctx context.Context, a store.Annotation) (store.Annotation, error)
 	DeleteAnnotation(ctx context.Context, k model.AssetKey, userID int64) error
+	// The time machine: the inventory as of a finished run.
+	DoneRuns(ctx context.Context, limit int) ([]store.RunSummary, error)
+	AdjacentDoneRuns(ctx context.Context, runID int64) (prev, next int64, err error)
 
 	// Scans, changes, targets and scan profiles.
 	SafetyReceipt(ctx context.Context, runID int64) (safety.Receipt, error)
@@ -147,6 +150,14 @@ type Deps struct {
 	// signature set. A nuclei import does not call it: imported signatures
 	// are disabled until enabled one by one.
 	SignaturesChanged func()
+	// Monitor answers /healthz (nil = it reports 503) and /metrics (needed
+	// when Cfg.MetricsToken is set).
+	Monitor Monitor
+	// Version is the build version shown by ramparteye_build_info.
+	Version string
+	// Notifier stores the webhook settings and sends test notifications
+	// (nil = Settings → Notifications says it is not available).
+	Notifier Notifier
 }
 
 var (
@@ -154,6 +165,7 @@ var (
 	_ Runner      = (*runner.Runner)(nil)
 	_ Pusher      = (*dojo.Pusher)(nil)
 	_ DojoChecker = (*dojo.Client)(nil)
+	_ Monitor     = (*store.Store)(nil)
 )
 
 // InstanceHeader marks every response with the installation's id, so the
@@ -187,6 +199,11 @@ type Server struct {
 	instance string
 	// lookupTimeout bounds one DNS lookup of a domain target on import.
 	lookupTimeout time.Duration
+	// monitor, healthTimeout and metrics serve /healthz and /metrics
+	// (metrics is nil while RAMPART_METRICS_TOKEN is unset).
+	monitor       Monitor
+	healthTimeout time.Duration
+	metrics       *metricsCollector
 }
 
 // NewServer parses the embedded templates and returns the server.
@@ -206,6 +223,9 @@ func newServerFS(d Deps, tmpl, static fs.FS, now func() time.Time) (*Server, err
 		lookupTimeout: lookupTimeout}
 	if s.log == nil {
 		s.log = slog.Default()
+	}
+	if err := s.initMonitoring(); err != nil {
+		return nil, err
 	}
 	s.auth = auth.NewAuthenticator(d.Store, d.Store, now)
 	hashes, err := assetHashes(static)
@@ -227,6 +247,8 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(s.recoverer, securityHeaders, s.instanceHeader, auth.CSRF)
 	r.Handle(auth.StaticPrefix+"*", http.StripPrefix(auth.StaticPrefix, s.staticHandler()))
+
+	s.monitoringRoutes(r)
 
 	session := auth.Middleware(s.d.Store, s.now)
 	r.NotFound(session(http.HandlerFunc(s.notFound)).ServeHTTP)
@@ -308,6 +330,9 @@ func (s *Server) Handler() http.Handler {
 		adm.Post("/settings/integrations", s.dojoSave)
 		adm.Post("/settings/integrations/test", s.dojoTest)
 		adm.Post("/settings/integrations/push", s.dojoPush)
+		adm.Get("/settings/notifications", s.notifyPage)
+		adm.Post("/settings/notifications", s.notifySave)
+		adm.Post("/settings/notifications/test", s.notifyTest)
 		adm.Get("/settings/audit", s.auditPage)
 		ua := r.With(s.require(auth.PermUsersAdmin))
 		ua.Get("/settings/users", s.usersPage)

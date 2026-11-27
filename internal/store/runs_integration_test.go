@@ -233,3 +233,41 @@ func TestResetRunningCancelsRequestedRuns(t *testing.T) {
 	assert.Equal(t, kept, open[0].ID)
 	assert.Equal(t, store.RunPaused, open[0].Status)
 }
+
+// The time machine lists finished runs only and steps between them,
+// imports included, skipping unfinished, failed and cancelled runs.
+func TestDoneRunsAndNeighbours(t *testing.T) {
+	s, pool := newStore(t)
+	first := insertRun(t, pool, "scan", store.RunDone)
+	failed := insertRun(t, pool, "scan", store.RunFailed)
+	imp := insertRun(t, pool, "import", store.RunDone)
+	cancelled := insertRun(t, pool, "scan", store.RunCancelled)
+	last := insertRun(t, pool, "scan", store.RunDone)
+	running := insertRun(t, pool, "scan", store.RunRunning)
+
+	runs := must.Value(s.DoneRuns(ctx, 10))
+	var ids []int64
+	for _, r := range runs {
+		ids = append(ids, r.ID)
+		assert.Equal(t, store.RunDone, r.Status)
+	}
+	assert.Equal(t, []int64{last, imp, first}, ids)
+	assert.Equal(t, "import", runs[1].Kind)
+	assert.Len(t, 2, must.Value(s.DoneRuns(ctx, 2)))
+
+	for _, tc := range []struct {
+		run, prev, next int64
+	}{
+		{first, 0, imp},
+		{imp, first, last},
+		{last, imp, 0},
+		{failed, first, imp},
+		{cancelled, imp, last},
+		{running, last, 0},
+	} {
+		prev, next, err := s.AdjacentDoneRuns(ctx, tc.run)
+		assert.NoError(t, err)
+		assert.Equal(t, tc.prev, prev)
+		assert.Equal(t, tc.next, next)
+	}
+}

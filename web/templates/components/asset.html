@@ -1,7 +1,7 @@
 {{/* Shared by the host and service pages. */}}
 
 {{/* Runs strip: one square per run. Data: []RunCell. */}}
-{{define "runs-strip"}}{{if .}}<div class="runs" role="group" aria-label="Runs, oldest first">{{range .}}<i class="{{.Class}}" role="img" aria-label="{{.Label}}" title="{{.Label}}"></i>{{end}}</div>{{else}}<p class="text-muted">No finished scans yet.</p>{{end}}{{end}}
+{{define "runs-strip"}}{{if .}}<div class="runs" role="group" aria-label="Runs, oldest first">{{range .}}<i class="{{.Class}}{{if .Mark}} run-mark{{end}}" role="img" aria-label="{{.Label}}" title="{{.Label}}"></i>{{end}}</div>{{else}}<p class="text-muted">No finished scans yet.</p>{{end}}{{end}}
 
 {{/* Time-of-day bands. Data: []BandView. */}}
 {{define "bands"}}<div class="bands" role="group" aria-label="Time of day (UTC), seen in runs">{{range .}}<div class="{{.Class}}"><span class="block text-[10px]">{{.Label}}</span>{{.Text}}</div>{{end}}</div>{{end}}
@@ -22,12 +22,13 @@
 {{define "meta-tags"}}{{range .CWE}}<a class="tag bg-info-bg text-fg" href="https://cwe.mitre.org/data/definitions/{{.}}.html" target="_blank" rel="noopener noreferrer" title="Common Weakness Enumeration">CWE-{{.}}</a>{{end}}{{range .Attack}}<a class="tag bg-info-bg text-fg" href="https://attack.mitre.org/techniques/{{.}}/" target="_blank" rel="noopener noreferrer" title="MITRE ATT&amp;CK">{{.}}</a>{{end}}{{end}}
 
 {{/* Changes of one asset. Data: []ChangeRow. */}}
-{{define "asset-changes"}}{{if .}}<table class="tbl"><tbody>{{range .}}<tr><td class="font-mono">#{{.RunID}}</td><td>{{template "change-tag" .Kind}}</td><td class="text-muted">{{template "cell" (dict "Value" .Detail "Max" 80)}}</td></tr>{{end}}</tbody></table>
+{{define "asset-changes"}}{{if .}}<table class="tbl"><tbody>{{range .}}<tr{{if .Mark}} class="change-mark"{{end}}><td class="font-mono">#{{.RunID}}</td><td>{{template "change-tag" .Kind}}</td><td class="text-muted">{{template "cell" (dict "Value" .Detail "Max" 80)}}</td></tr>{{end}}</tbody></table>
 {{else}}<p class="text-muted">No changes recorded.</p>{{end}}{{end}}
 
 {{/* Analyst annotation. Data: AnnotationForm. */}}
-{{define "annotation-panel"}}{{$f := .}}<section class="panel mt-4" aria-label="Analyst annotation">
+{{define "annotation-panel"}}{{$f := .}}<section id="annotation" class="panel mt-4" aria-label="Analyst annotation">
 {{template "panel-title" "Analyst annotation"}}
+{{if $f.AsOfRun}}<p class="note mb-2">Annotations are not historical: this panel shows the current annotation, not one from run #{{$f.AsOfRun}}, and the score above counts it as it is today.{{with $f.EditHref}} <a class="underline" href="{{.}}">Edit it in the latest view</a>.{{end}}</p>{{end -}}
 {{if $f.Error}}<p role="alert" class="alert-error mb-2">{{$f.Error}}</p>{{end}}
 {{if $f.CanEdit}}<form method="post" action="{{$f.Action}}" class="grid max-w-xl gap-2">
 <label><span class="lbl">Comment</span><textarea name="comment" rows="3" maxlength="4000" class="input">{{$f.Comment}}</textarea></label>

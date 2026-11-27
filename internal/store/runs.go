@@ -119,6 +119,24 @@ func (s *Store) Runs(ctx context.Context, limit int) ([]RunSummary, error) {
 	return collect(rows, func(r pgx.Rows) (RunSummary, error) { return scanRunSummary(r) })
 }
 
+// DoneRuns returns the newest finished (done) runs first, imports included.
+func (s *Store) DoneRuns(ctx context.Context, limit int) ([]RunSummary, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+runSummaryCols+` WHERE r.status = 'done' ORDER BY r.id DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	return collect(rows, func(r pgx.Rows) (RunSummary, error) { return scanRunSummary(r) })
+}
+
+// AdjacentDoneRuns returns the finished runs just before and just after
+// runID (0 when there is none), imports included.
+func (s *Store) AdjacentDoneRuns(ctx context.Context, runID int64) (prev, next int64, err error) {
+	err = s.db.QueryRow(ctx, `SELECT
+		coalesce((SELECT max(id) FROM scan_runs WHERE id < $1 AND status = 'done'), 0),
+		coalesce((SELECT min(id) FROM scan_runs WHERE id > $1 AND status = 'done'), 0)`, runID).Scan(&prev, &next)
+	return prev, next, err
+}
+
 // LatestDoneRun returns the newest finished scan run, or the newest finished
 // import when no scan has finished (0 when there is none). A scan whose diff
 // is not applied yet is skipped while an older applied one exists.

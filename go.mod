@@ -2,6 +2,8 @@ module github.com/chrobson/ramparteye
 
 go 1.26.0
 
+toolchain go1.26.11
+
 require github.com/ctx42/testing v0.60.0
 
 require (
