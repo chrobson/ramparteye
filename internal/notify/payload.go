@@ -126,7 +126,9 @@ type runData struct {
 // buildMessage builds the message of event about d (nil: a test without a
 // finished run). baseURL ("" = none) must be normalised.
 func buildMessage(event string, now time.Time, instance, baseURL string, d *runData) Message {
-	m := Message{Version: PayloadVersion, Event: event, Instance: instance, SentAt: now.UTC(), Top: []Item{},
+	// Whole seconds, so sent_at equals the X-Rampart-Timestamp header.
+	m := Message{Version: PayloadVersion, Event: event, Instance: instance, SentAt: now.UTC().Truncate(time.Second),
+		Top:    []Item{},
 		Safety: Safety{Status: "missing", NotPassed: []string{}}}
 	if d == nil {
 		m.Headline = "Test notification from RampartEye."

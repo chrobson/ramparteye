@@ -107,6 +107,12 @@ func TestBuildFinishedJSON(t *testing.T) {
 	assert.False(t, hasSev) // no detection, no severity
 }
 
+func TestSentAtMatchesTimestampHeader(t *testing.T) {
+	m := buildMessage(EventFinished, sentAt.Add(723*time.Millisecond), instID, "", sampleRun())
+
+	assert.Equal(t, sentAt, m.SentAt) // whole seconds, like X-Rampart-Timestamp
+}
+
 func TestBuildWithoutBaseURLHasNoLinks(t *testing.T) {
 	m := buildMessage(EventFinished, sentAt, instID, "", sampleRun())
 
