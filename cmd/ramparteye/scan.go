@@ -20,7 +20,7 @@ import (
 const cliProfileName = "CLI"
 
 // cliPushBudget bounds how long `scan` waits for the automatic DefectDojo
-// push of its run before exiting.
+// push and the webhook notification of its run before exiting.
 const cliPushBudget = 2 * time.Minute
 
 const scanUsage = "usage: ramparteye scan --profile NAME | ramparteye scan <target>..."
@@ -99,10 +99,11 @@ func cmdScan(e *env, args []string) int {
 		close(idle)
 	}()
 	followRun(events, idle, runID, e.stderr)
-	// The automatic DefectDojo push of the finished run gets cliPushBudget
-	// to complete before the pusher closes.
+	// The automatic DefectDojo push and the webhook notification of the
+	// finished run get cliPushBudget to complete before they are closed.
 	shutdown(log, shutdownBudget, shutdownSteps{waitRuns: s.runner.Wait,
-		waitPushes: s.pusher.Wait, pushBudget: cliPushBudget, closePusher: s.pusher.Close})
+		waitPushes: s.pusher.Wait, pushBudget: cliPushBudget, closePusher: s.pusher.Close,
+		waitNotify: s.notifier.Wait, closeNotifier: s.notifier.Close})
 
 	// The summary is read even after Ctrl+C, which paused the run.
 	rctx := context.WithoutCancel(ctx)

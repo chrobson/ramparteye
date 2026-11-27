@@ -21,6 +21,7 @@ import (
 	"github.com/chrobson/ramparteye/internal/diff"
 	"github.com/chrobson/ramparteye/internal/dojo"
 	"github.com/chrobson/ramparteye/internal/httpfp"
+	"github.com/chrobson/ramparteye/internal/notify"
 	"github.com/chrobson/ramparteye/internal/runner"
 	"github.com/chrobson/ramparteye/internal/safety"
 	"github.com/chrobson/ramparteye/internal/scan"
@@ -189,14 +190,17 @@ func loadBox(cfg *config.Config, create bool) (*secret.Box, bool, error) {
 }
 
 // scanner is the scan machinery shared by `serve` and `scan`: the runner
-// (with its signature engine) and the DefectDojo pusher on its run hook.
+// (with its signature engine) and, on its run hook, the DefectDojo pusher
+// and the webhook notifier.
 type scanner struct {
-	runner *runner.Runner
-	pusher *dojo.Pusher
+	runner   *runner.Runner
+	pusher   *dojo.Pusher
+	notifier *notify.Notifier
 }
 
-// newScanner wires the runner and the pusher. nm replaces nmap (tests);
-// nil runs the real binary.
+// newScanner wires the runner, the pusher and the notifier. nm replaces
+// nmap (tests); nil runs the real binary. cfg.SecretKey must be loaded
+// (loadBox): it keys the instance id in notifications.
 func newScanner(cfg config.Config, st *store.Store, sc scope.Scope, box *secret.Box, log *slog.Logger, nm scan.Scanner) *scanner {
 	retries := cfg.HTTPRetries
 	if retries == 0 {
@@ -218,8 +222,29 @@ func newScanner(cfg config.Config, st *store.Store, sc scope.Scope, box *secret.
 	r := runner.New(st, nm, prober, eng, sc, runnerConfig(cfg, log))
 	p := dojo.NewPusher(st, dojo.StoredSettings(st, box, cfg), dojo.DefaultClient)
 	p.Log = log
-	r.OnRunDone = p.OnRunDone
-	return &scanner{runner: r, pusher: p}
+	n := notify.New(st, box, notify.Options{Instance: web.InstanceID(cfg), Log: log,
+		UserAgent: "ramparteye/" + version + " (+attack surface inventory)"})
+	r.OnRunDone = runHooks(log, p.OnRunDone, n.OnRunDone)
+	return &scanner{runner: r, pusher: p, notifier: n}
+}
+
+// runHooks composes run hooks: each is called in order, and a panicking
+// hook is logged without keeping the others from running. The hooks return
+// at once and do their work in the background.
+func runHooks(log *slog.Logger, hooks ...func(ctx context.Context, runID int64, status string)) func(
+	ctx context.Context, runID int64, status string) {
+	return func(ctx context.Context, runID int64, status string) {
+		for _, h := range hooks {
+			func() {
+				defer func() {
+					if p := recover(); p != nil {
+						log.Error("run hook panicked", "run", runID, "status", status)
+					}
+				}()
+				h(ctx, runID, status)
+			}()
+		}
+	}
 }
 
 // runnerConfig maps the configuration to the runner's settings.
@@ -253,15 +278,20 @@ type shutdownSteps struct {
 	waitPushes  func()                          // returns when DefectDojo pushes in flight have finished
 	pushBudget  time.Duration                   // bounds waitPushes, separately from the budget
 	closePusher func(ctx context.Context) error // cancels and waits for DefectDojo pushes
+	// waitNotify returns when webhook notifications in flight have finished;
+	// it is waited for together with waitPushes, within pushBudget.
+	waitNotify    func()
+	closeNotifier func(ctx context.Context) error // cancels and waits for webhook notifications
 }
 
 // shutdown runs the steps in order within one budget: the runner is waited
-// for before the pusher closes, so no OnRunDone call can follow Close.
-// A step still running when the budget is spent is logged and abandoned;
-// the pusher is then closed with the expired context, which cancels its
-// pushes in flight without waiting. waitPushes, when set, first lets the
-// pushes in flight finish within pushBudget (the CLI scan, whose run just
-// ended); serve leaves it unset and cancels them.
+// for before the pusher and the notifier close, so no OnRunDone call can
+// follow Close. A step still running when the budget is spent is logged and
+// abandoned; the pusher and the notifier are then closed with the expired
+// context, which cancels their work in flight without waiting. waitPushes
+// and waitNotify, when set, first let the pushes and notifications in
+// flight finish within pushBudget (the CLI scan, whose run just ended);
+// serve leaves them unset and cancels them.
 func shutdown(log *slog.Logger, budget time.Duration, s shutdownSteps) {
 	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
@@ -286,15 +316,14 @@ func shutdown(log *slog.Logger, budget time.Duration, s shutdownSteps) {
 			log.Warn("scans still stopping at exit", "budget", budget.String())
 		}
 	}
-	if s.waitPushes != nil {
-		pushesDone := make(chan struct{})
-		go func() {
-			s.waitPushes()
-			close(pushesDone)
-		}()
+	if s.waitPushes != nil || s.waitNotify != nil {
+		pushesDone, notifyDone := started(s.waitPushes), started(s.waitNotify)
 		pctx, pcancel := context.WithTimeout(context.Background(), s.pushBudget)
 		if !waitDone(pctx, pushesDone) {
 			log.Warn("DefectDojo pushes still running; cancelling them", "budget", s.pushBudget.String())
+		}
+		if !waitDone(pctx, notifyDone) {
+			log.Warn("webhook notifications still running; cancelling them", "budget", s.pushBudget.String())
 		}
 		pcancel()
 	}
@@ -303,6 +332,24 @@ func shutdown(log *slog.Logger, budget time.Duration, s shutdownSteps) {
 			log.Warn("DefectDojo pushes still running at exit", "err", err)
 		}
 	}
+	if s.closeNotifier != nil {
+		if err := s.closeNotifier(ctx); err != nil {
+			log.Warn("webhook notifications still running at exit", "err", err)
+		}
+	}
+}
+
+// started runs wait in the background and returns a channel closed when it
+// returned (at once for nil).
+func started(wait func()) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		if wait != nil {
+			wait()
+		}
+		close(done)
+	}()
+	return done
 }
 
 // waitDone reports whether done closed before ctx ended.
