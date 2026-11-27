@@ -157,6 +157,18 @@ on the host.
   `RAMPART_NMAP_PATH=/usr/local/bin/nmap-privileged` and `NMAP_PRIVILEGED=1`, as in
   `compose.demo.yml`. That widens the container's privileges; keep connect scans unless you need
   SYN scans or ARP discovery.
+- **Monitoring endpoints** ([MONITORING.md](MONITORING.md)). `GET /healthz` is open to whoever
+  can reach the UI port: it answers `ok` or `unavailable` and nothing else (no version, no error
+  text), and runs one `SELECT 1`. `GET /metrics` does not exist unless `RAMPART_METRICS_TOKEN` is
+  set (at least 16 characters, checked at start); then it needs `Authorization: Bearer <token>`,
+  compared in constant time, and a UI session is not accepted instead. It exposes counts,
+  timestamps and flags only: label values come from fixed lists (status, state, severity, change
+  kind), never from addresses, names, products, banners or other scanned or typed text, so it
+  does not leak the inventory. It still tells whoever holds the token how many hosts and services
+  exist and whether the safety checks passed, so give the token to the monitoring system only,
+  keep it out of logs (the configuration printer redacts it) and serve `/metrics` over TLS or on
+  a network only monitoring can reach. The token is not rate limited; it is as long as you make
+  it, so use a random one.
 - DefectDojo **Test connection** makes the server send requests to the configured URL and may
   show parts of the response in error messages. It is an Admin-only (`settings.admin`) action;
   treat that permission as trusted.

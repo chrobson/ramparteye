@@ -116,7 +116,11 @@ last 30 runs in the drilldown.
 | `RAMPART_TRUSTED_PROXIES` | (empty) | Reverse proxies (CIDRs or IPs) whose `X-Forwarded-For` is believed. Empty: the header is ignored. |
 | `RAMPART_SECRETS_DIR` | `/var/lib/ramparteye/secrets` | Directory of `secret.key`; must support hard links and be owned by the app user. |
 | `RAMPART_SECRET_KEY` | (generated) | AES-256-GCM key as 64 hex characters; overrides the key file. |
+| `RAMPART_METRICS_TOKEN` | (empty) | Bearer token of `GET /metrics`, at least 16 printable ASCII characters without spaces (for example `openssl rand -hex 32`). **Empty: the endpoint does not exist** (404). Redacted wherever the configuration is logged. See [MONITORING.md](MONITORING.md). |
 | `RAMPART_DEMO` | `false` | Create the four demo accounts on the first start (set by `compose.demo.yml`). |
+
+`GET /healthz` (no login; `200 ok` while the app and its database answer) needs no setting. The
+container health checks use it.
 
 ### DefectDojo
 

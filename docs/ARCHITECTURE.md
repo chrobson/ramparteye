@@ -44,7 +44,8 @@ orchestration and DefectDojo pusher all run in `ramparteye serve`; the other sub
 | `internal/secret` | AES-256-GCM box and the key file in the secrets directory. |
 | `internal/store` | PostgreSQL persistence (plain SQL over pgx). |
 | `internal/db` | Connection pool and embedded migrations. |
-| `internal/web` | chi routes, pages, htmx partials, SSE events, server-rendered SVG charts. |
+| `internal/prom` | Prometheus text exposition format 0.0.4 encoder (gauges and counters, no client library). |
+| `internal/web` | chi routes, pages, htmx partials, SSE events, server-rendered SVG charts, `/healthz` and `/metrics`. |
 | `web/` | Templates and static files embedded with `go:embed`; Tailwind sources and the generated `app.css`. |
 
 ## A scan run
@@ -124,4 +125,15 @@ High orange, Medium amber, Low sky, Info grey). Dark is the default; a light the
   the lab as its only scope; it adds `NET_RAW`/`NET_ADMIN` for a separate nmap copy with file
   capabilities (SYN scan, ARP discovery).
 - `install.sh` writes `.env`, starts the stack and prints the first-login information.
-- The image is Alpine with nmap and the static binary; `HEALTHCHECK` polls `/login`.
+- The image is Alpine with nmap and the static binary; `HEALTHCHECK` polls `/healthz`.
+
+## Monitoring
+
+Two endpoints sit outside the session middleware ([MONITORING.md](MONITORING.md)):
+
+- `GET /healthz` answers `200 ok` when the database answers `SELECT 1` within 2 seconds, `503`
+  otherwise, without details.
+- `GET /metrics` exists only when `RAMPART_METRICS_TOKEN` is set and needs
+  `Authorization: Bearer`. A handful of aggregate queries (`internal/store/metrics.go`) feed it;
+  the rendered text is cached for 10 seconds and a failing query drops only its group of metrics
+  (`ramparteye_collector_success`). Labels come from fixed enumerations, never from scanned data.
