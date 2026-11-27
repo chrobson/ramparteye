@@ -125,5 +125,6 @@ docs/             documentation, logo, screenshots
 - English everywhere: code, comments, UI copy, logs, docs.
 - Commit messages: `type(scope): short lowercase imperative subject`, at most 60 characters
   (`feat(runner): ...`, `fix(web): ...`, `docs: ...`).
-- Keep the safety model intact: nothing that sends a request body or a method other than
-  `GET`/`HEAD`, nothing that scans outside the scope. See [SECURITY-MODEL.md](SECURITY-MODEL.md).
+- Keep the safety model intact: nothing that sends a scanned host a request body or a method
+  other than `GET`/`HEAD`, nothing that scans outside the scope. See
+  [SECURITY-MODEL.md](SECURITY-MODEL.md).
