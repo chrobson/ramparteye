@@ -36,6 +36,6 @@ ENV RAMPART_SECRETS_DIR=/var/lib/ramparteye/secrets \
 USER 10001:10001
 EXPOSE 9080
 HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=30 \
-	CMD wget -q -O /dev/null http://127.0.0.1:9080/login || exit 1
+	CMD wget -q -O /dev/null http://127.0.0.1:9080/healthz || exit 1
 ENTRYPOINT ["ramparteye"]
 CMD ["serve"]
