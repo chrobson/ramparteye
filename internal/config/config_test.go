@@ -255,12 +255,12 @@ func TestLoadDojoFlags(t *testing.T) {
 }
 
 func TestConfigRedactsSecrets(t *testing.T) {
-	c := Config{DojoToken: "TOPSECRET", SecretKey: []byte("KEYSECRET"), HTTPAddr: ":1"}
+	c := Config{DojoToken: "TOPSECRET", SecretKey: []byte("KEYSECRET"), MetricsToken: "METRICSSECRET", HTTPAddr: ":1"}
 	for _, out := range []string{
 		fmt.Sprintf("%v", c), fmt.Sprintf("%+v", c), fmt.Sprintf("%#v", c), fmt.Sprint(&c),
 		string(must.Value(json.Marshal(c))),
 	} {
-		for _, leak := range []string{"TOPSECRET", "KEYSECRET"} {
+		for _, leak := range []string{"TOPSECRET", "KEYSECRET", "METRICSSECRET"} {
 			assert.False(t, strings.Contains(out, leak), out)
 		}
 	}
@@ -331,4 +331,51 @@ func TestInstallEnvTemplateMatchesLoad(t *testing.T) {
 	}
 	assert.False(t, read["RAMPART_DOJO_USER"])
 	assert.False(t, read["RAMPART_DOJO_PASSWORD"])
+}
+
+func TestLoadMetricsTokenDefaultsToDisabled(t *testing.T) {
+	cfg, err := Load(envMap(nil))
+
+	assert.NoError(t, err)
+	assert.Equal(t, "", cfg.MetricsToken)
+}
+
+func TestLoadMetricsToken(t *testing.T) {
+	tok := "0123456789abcdef-._~+/="
+
+	cfg, err := Load(envMap(map[string]string{"RAMPART_METRICS_TOKEN": tok}))
+
+	assert.NoError(t, err)
+	assert.Equal(t, tok, cfg.MetricsToken)
+	assert.Contain(t, "[redacted]", cfg.String())
+}
+
+func TestLoadMetricsTokenMinimumLength(t *testing.T) {
+	short := strings.Repeat("a", MinMetricsTokenLen-1)
+
+	_, err := Load(envMap(map[string]string{"RAMPART_METRICS_TOKEN": short}))
+
+	assert.ErrorContain(t, "RAMPART_METRICS_TOKEN", err)
+	assert.ErrorContain(t, "at least 16 characters", err)
+	assert.False(t, strings.Contains(err.Error(), short))
+
+	_, err = Load(envMap(map[string]string{"RAMPART_METRICS_TOKEN": strings.Repeat("a", MinMetricsTokenLen)}))
+	assert.NoError(t, err)
+}
+
+func TestLoadMetricsTokenRejectsUnusableCharacters(t *testing.T) {
+	for name, tok := range map[string]string{
+		"space":     "aaaaaaaa aaaaaaaa",
+		"newline":   "aaaaaaaaaaaaaaaaaa\n",
+		"tab":       "aaaaaaaaaaaaaaaaaa\t",
+		"non-ascii": "aaaaaaaaaaaaaaaaaaż",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Load(envMap(map[string]string{"RAMPART_METRICS_TOKEN": tok}))
+
+			assert.ErrorContain(t, "RAMPART_METRICS_TOKEN", err)
+			assert.ErrorContain(t, "printable ASCII", err)
+			assert.False(t, strings.Contains(err.Error(), tok))
+		})
+	}
 }
