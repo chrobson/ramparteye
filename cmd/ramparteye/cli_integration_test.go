@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -174,6 +175,7 @@ func TestServeSmokeIntegration(t *testing.T) {
 		"RAMPART_HTTP_ADDR":     "127.0.0.1:0",
 		"RAMPART_SECRETS_DIR":   secrets,
 		"RAMPART_ALLOWED_CIDRS": "127.0.0.1/32",
+		"RAMPART_METRICS_TOKEN": "smoke-test-metrics-token",
 	})
 	e.ctx = ctx
 	addr := make(chan string, 1)
@@ -200,6 +202,7 @@ func TestServeSmokeIntegration(t *testing.T) {
 	assert.NotEmpty(t, res.Header.Get("Content-Security-Policy"))
 	assert.NotEmpty(t, res.Header.Get("X-Rampart-Instance"))
 	assert.Equal(t, 1, strings.Count(out.String(), "shown once"))
+	checkMonitoring(t, base)
 	fi, err := os.Stat(filepath.Join(secrets, keyFileName))
 	assert.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm())
@@ -213,6 +216,43 @@ func TestServeSmokeIntegration(t *testing.T) {
 		t.Fatal("serve did not shut down")
 	}
 	assert.Contain(t, `"msg":"shutting down"`, errb.String())
+}
+
+// checkMonitoring covers /healthz and /metrics of a running server.
+func checkMonitoring(t *testing.T, base string) {
+	t.Helper()
+	get := func(path, authz string) (int, string, http.Header) {
+		req, err := http.NewRequest(http.MethodGet, base+path, nil)
+		assert.NoError(t, err)
+		if authz != "" {
+			req.Header.Set("Authorization", authz)
+		}
+		res, err := http.DefaultClient.Do(req)
+		assert.NoError(t, err)
+		defer res.Body.Close()
+		var b strings.Builder
+		_, err = io.Copy(&b, res.Body)
+		assert.NoError(t, err)
+		return res.StatusCode, b.String(), res.Header
+	}
+
+	code, body, _ := get("/healthz", "")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, "ok", body)
+
+	code, _, hdr := get("/metrics", "")
+	assert.Equal(t, http.StatusUnauthorized, code)
+	assert.Equal(t, "Bearer", hdr.Get("WWW-Authenticate"))
+	code, _, _ = get("/metrics", "Bearer wrong")
+	assert.Equal(t, http.StatusUnauthorized, code)
+
+	code, body, hdr = get("/metrics", "Bearer smoke-test-metrics-token")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Equal(t, "text/plain; version=0.0.4; charset=utf-8", hdr.Get("Content-Type"))
+	assert.Contain(t, `ramparteye_build_info{version="`+version+`"} 1`, body)
+	for _, c := range []string{"runs", "hosts", "inventory", "safety", "defectdojo"} {
+		assert.Contain(t, `ramparteye_collector_success{collector="`+c+`"} 1`+"\n", body)
+	}
 }
 
 func TestServeRestartReusesKeyAndAccountsIntegration(t *testing.T) {

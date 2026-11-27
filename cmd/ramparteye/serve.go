@@ -147,6 +147,8 @@ func serveDeps(runCtx context.Context, pool *pgxpool.Pool, st *store.Store, s *s
 		Resolver:    target.Resolver(config.DefaultResolver),
 		ShutdownCtx: runCtx,
 		Box:         box,
+		Monitor:     st,
+		Version:     version,
 		SignaturesChanged: func() {
 			ctx, cancel := context.WithTimeout(runCtx, 30*time.Second)
 			defer cancel()
