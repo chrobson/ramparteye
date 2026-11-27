@@ -166,8 +166,8 @@ on the host.
 
 ## 9. Supply chain
 
-Container base images and GitHub Actions are pinned to version tags; pinning them to digests at
-release time is on the [roadmap](../ROADMAP.md). htmx is vendored with its version and SHA-256 in
+Container images are pinned to tag plus index digest and GitHub Actions to commit SHAs
+(see [DEVELOPMENT.md](DEVELOPMENT.md#pinned-dependencies)); CI runs `govulncheck`. htmx is vendored with its version and SHA-256 in
 [web/static/htmx.LICENSE](../web/static/htmx.LICENSE); the Tailwind CLI is downloaded at a pinned
 version and checksum-verified. Report vulnerabilities as described in
 [SECURITY.md](../SECURITY.md).
