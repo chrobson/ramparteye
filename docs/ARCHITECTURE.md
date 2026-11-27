@@ -88,6 +88,10 @@ A host missing from 3 consecutive runs becomes inactive. A latency change is rec
 when the response time changes by more than 300 ms and at least doubles or halves. The dashboard turns the latest diff into a plain-language headline; the Changes page
 is the timeline of all diffs.
 
+Observations (`host_obs`, `services`, `http_obs`, `detections`) and `changes` are kept per run;
+`host_state` and `annotations` exist only as their current value. The time machine (below)
+relies on this split.
+
 ## Data model
 
 Main tables (migrations in [internal/db/migrations](../internal/db/migrations)):
@@ -115,6 +119,21 @@ configured not to evaluate code. Everything coming from scanned hosts reaches a 
 The layout follows one theme ("black and red"): near-black background, crimson only for the
 brand, active navigation and primary buttons, and separate severity colours (Critical fuchsia,
 High orange, Medium amber, Low sky, Info grey). Dark is the default; a light theme is available.
+
+**Time machine.** `/assets?run=N`, `/assets/{ip}?run=N` and `/assets/{ip}/{port}/{proto}?run=N`
+show the inventory as finished run N saw it. These are point-in-time: the hosts, services, HTTP
+fingerprints and detections of run N, and interest scores computed from them and from run N's own
+changes, so "New since last scan" means new against run N's baseline. Host state is shown only as
+what run N itself observed (up = answered; down = recorded without an answer or reported down by
+its diff); inactive and unstable exist only for the current inventory. Analyst annotations
+are always current: they are shown read-only, with a link to edit them in the latest view, and
+count in the score as they are today. The availability strip and the change list stay the full
+history, with run N marked. An amber banner names the run, its profile and finish time, says when
+the run saw less than the whole inventory (an import holds only the hosts of its file; a profile
+may cover only some targets), and offers older/newer finished runs, "Back to latest" and the
+run's CSV/JSON export. A run picker on the asset list lists recent finished runs; run pages and
+change-run pages link to "Inventory as of this run". Only `done` runs are accepted: an unknown
+run is a 404, a malformed, unfinished, failed or cancelled one a 400.
 
 ## Deployment
 
