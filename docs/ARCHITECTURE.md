@@ -1,8 +1,9 @@
 # Architecture
 
 RampartEye is one Go binary, `ramparteye`, plus PostgreSQL. The web UI, scheduler, scanner
-orchestration and DefectDojo pusher all run in `ramparteye serve`; the other subcommands
-(`scan`, `import`, `export`, `audit`, `dojo push`, ...) use the same packages from the CLI.
+orchestration, DefectDojo pusher and webhook notifier all run in `ramparteye serve`; the other
+subcommands (`scan`, `import`, `export`, `audit`, `dojo push`, ...) use the same packages from the
+CLI.
 
 ```
                      browser (htmx, SSE)
@@ -14,6 +15,7 @@ orchestration and DefectDojo pusher all run in `ramparteye serve`; the other sub
   |    scan (nmap)  httpfp (GET/HEAD)  sig  diff       |
   |    safety meter            scope checks everywhere |
   |  dojo pusher  ------------------------------------------> DefectDojo API v2
+  |  notifier  ---------------------------------------------> webhook (JSON, Slack-compatible)
   +----------|------------------------|----------------+
              | exec                   | pgx
          nmap (same container)    PostgreSQL + pg_tde
@@ -38,6 +40,9 @@ orchestration and DefectDojo pusher all run in `ramparteye serve`; the other sub
 | `internal/interest` | The transparent 0-100 interest score of a service (rule table in the package doc). |
 | `internal/safety` | Safety meter and receipt: what a run actually sent, and the five checks. |
 | `internal/dojo` | Generic Findings codec, DefectDojo API client, settings (sealed token), pusher and push history. |
+| `internal/notify` | Webhook notifications after a run: settings (sealed URL and signing secret), JSON and Slack-compatible messages, signed delivery with retries, delivery history. |
+| `internal/summary` | Change counts, the plain-language headline and the interest ranking of a run, shared by the dashboard and the notifications. |
+| `internal/urlcheck` | Validation of administrator-configured URLs (DefectDojo, webhook, public base URL) with errors that never echo the input. |
 | `internal/exchange` | CSV, JSON and Generic Findings export; nmap XML and Generic Findings import. |
 | `internal/auth` | Passwords (bcrypt), sessions, CSRF, RBAC, login throttle. |
 | `internal/bootstrap` | First-start accounts: one admin, or the four demo accounts. |
@@ -68,10 +73,13 @@ orchestration and DefectDojo pusher all run in `ramparteye serve`; the other sub
    20 requests/s, burst 5), signatures are evaluated on every service (path probes within the
    per-host budget), then the run is compared with the previous finished scan: changes, host
    states and availability are stored.
-4. **Finish.** The safety receipt is stored, the run ends `done` (or `failed`), and the
-   DefectDojo pusher is notified; with auto-push it reimports the run in the background.
+4. **Finish.** The safety receipt is stored, the run ends `done` (or `failed`), and the run hook
+   calls the DefectDojo pusher (with auto-push it reimports the run in the background) and the
+   webhook notifier (when enabled it posts a summary in the background; see
+   [NOTIFICATIONS.md](NOTIFICATIONS.md)).
 
-A cancelled run skips step 3's diff and step 4's push but still stores its receipt. Live progress
+A cancelled run skips step 3's diff and step 4's push and notification but still stores its
+receipt. Live progress
 (chunks, hosts, packets/s against budget) reaches the UI as Server-Sent Events on `/events`.
 
 ## Change detection
@@ -102,6 +110,7 @@ Main tables (migrations in [internal/db/migrations](../internal/db/migrations)):
 - `signatures` (built-ins synced from the binary on start, custom and nuclei rows);
 - `run_safety`, `run_safety_probes` (the receipt);
 - `dojo_config` (sealed token), `dojo_pushes` (push history);
+- `notify_config` (sealed webhook URL and signing secret), `notify_deliveries` (delivery history);
 - `users`, `roles`, `role_permissions`, `sessions`, `audit_log`, `annotations` (analyst notes,
   severity overrides, false positives), `secrets`.
 

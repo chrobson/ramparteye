@@ -2,8 +2,8 @@
 
 RampartEye reads its configuration from `RAMPART_*` environment variables. With the installer
 they live in `.env` next to `compose.yml`; apply a change with `docker compose up -d`. Settings
-edited in the UI (scan profiles, targets, signatures, users, the DefectDojo connection) are stored
-in the database.
+edited in the UI (scan profiles, targets, signatures, users, the DefectDojo connection, webhook
+notifications) are stored in the database.
 
 ## Installer
 
@@ -139,6 +139,12 @@ comes from the environment and the form is read-only.
 | `RAMPART_DOJO_CLOSE_MISSING` | `false` | Close findings that are no longer seen (`close_old_findings`). |
 
 See [DEFECTDOJO.md](DEFECTDOJO.md).
+
+### Webhook notifications
+
+Configured only in Settings → Notifications (no environment variables): a webhook URL (JSON or
+Slack-compatible, which covers Mattermost and Rocket.Chat), an optional signing secret and the
+public base URL used for links. See [NOTIFICATIONS.md](NOTIFICATIONS.md).
 
 ## Commands
 

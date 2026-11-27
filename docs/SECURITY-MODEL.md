@@ -49,6 +49,24 @@ unauthorised scanning acceptable.
 - Content from scanned hosts (titles, headers, cookies, banners, certificate fields) is treated as
   hostile: it is size-bounded when stored and escaped wherever it is shown (pages, CSV, SSE).
 
+**Traffic that is not scanning.** The rules above (GET/HEAD only, no bodies, nothing outside the
+scope, metered in the safety receipt) govern traffic to scanned targets. Two integrations send
+requests elsewhere, and only to an endpoint an administrator configured in Settings
+(`settings.admin`) or the environment:
+
+- the **DefectDojo pusher** sends `GET` (Test connection) and `POST` (reimport) requests with the
+  API token to the configured DefectDojo URL; redirects to another host or from https to http
+  are refused;
+- the **webhook notifier** sends one `POST` with a JSON body (plus up to two retries) to the
+  configured webhook URL after a run and for **Send test notification**, and never follows
+  redirects. See
+  [NOTIFICATIONS.md](NOTIFICATIONS.md).
+
+Neither is part of scanning: they do not go through the scanner's HTTP prober or its
+scope-checking dialer, they are not counted in the safety receipt, and they never contact a
+scanned host unless an administrator configured that host as the endpoint. They carry results
+out of RampartEye, so configure them only with endpoints that may receive scan data.
+
 ## 3. Intensity and budgets
 
 - `RAMPART_MAX_RATE` (default 5000 packets/s) caps every run; a profile can only set a lower rate,
@@ -86,8 +104,8 @@ unless every check passed (so `incomplete` fails too).
 The **Cancel all scans** control in the top bar (with a confirmation step) cancels every
 unfinished run: nmap processes of runs in this process are killed within seconds, interrupted
 chunks return to pending, the safety receipt is still saved and the run ends `cancelled`.
-Post-processing stops: no diff is applied and nothing is pushed to DefectDojo for a cancelled
-run. Queued and paused runs are marked cancelled at once, and a run executing in another process
+Post-processing stops: no diff is applied, nothing is pushed to DefectDojo and no webhook
+notification is sent for a cancelled run. Queued and paused runs are marked cancelled at once, and a run executing in another process
 (the `scan` CLI) stops at its next chunk boundary. The action is recorded in the audit log.
 
 ## 6. Accounts, sessions and login throttling
@@ -121,8 +139,11 @@ run. Queued and paused runs are marked cancelled at once, and a run executing in
 - **Database.** PostgreSQL runs as Percona Distribution for PostgreSQL with `pg_tde`: the whole
   cluster (tables, indexes, TOAST, sequences and WAL) is encrypted with AES-256, and plaintext is
   kept out of logs and temp files. Its keyring lives in the `pgkeys` volume.
-- **Secrets in the database** (the DefectDojo API token) are additionally sealed with AES-256-GCM
-  using the app's key, bound to their column.
+- **Secrets in the database** (the DefectDojo API token, the webhook URL, which is itself a
+  credential for Slack-style webhooks, and the webhook signing secret) are additionally sealed
+  with AES-256-GCM using the app's key, bound to their column. They are never shown again in the
+  UI and are kept out of logs, error messages, the audit log and the delivery history, which name
+  at most the scheme and host of the webhook.
 - **The app key** is `secret.key` in `RAMPART_SECRETS_DIR` (the `secrets` volume), generated on the
   first start, or supplied with `RAMPART_SECRET_KEY` (64 hex characters). An existing key file is
   never overwritten, so a restart cannot rotate it silently. The volume must be owned by the app
@@ -130,8 +151,8 @@ run. Queued and paused runs are marked cancelled at once, and a run executing in
   with `link(2)` so concurrent first starts agree on one key. Local Docker volumes do; some
   network file systems do not.
 - **Back up `secrets` and `pgkeys` together with `pgdata`.** Without `pgkeys` the database is
-  unreadable; without `secret.key` the stored DefectDojo token cannot be decrypted (enter it
-  again in Settings).
+  unreadable; without `secret.key` the stored DefectDojo token and webhook credentials cannot be
+  decrypted (enter them again in Settings).
 
 **What this protects against, honestly.** By default the keys sit on the same Docker host as the
 data, in separate volumes. Encryption at rest therefore protects copies of the data that leave
@@ -171,7 +192,9 @@ on the host.
   it, so use a random one.
 - DefectDojo **Test connection** makes the server send requests to the configured URL and may
   show parts of the response in error messages. It is an Admin-only (`settings.admin`) action;
-  treat that permission as trusted.
+  treat that permission as trusted. **Send test notification** (also `settings.admin`) makes the
+  server `POST` to the stored webhook URL; it shows only the HTTP status or a network error, never
+  the response body.
 - Run one `serve` per database. On start, `serve` returns chunks left running by a previous
   process to pending; a second `serve` on the same database would reset the first one's work.
   The `scan` CLI may run next to `serve`.
