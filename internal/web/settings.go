@@ -35,6 +35,7 @@ var settingsTabs = []SettingsTab{
 	{Label: "Scope", Href: "/settings/scope", Perm: auth.PermSettingsAdmin},
 	{Label: "Users & roles", Href: "/settings/users", Perm: auth.PermUsersAdmin},
 	{Label: "Integrations", Href: "/settings/integrations", Perm: auth.PermSettingsAdmin},
+	{Label: "Notifications", Href: "/settings/notifications", Perm: auth.PermSettingsAdmin},
 	{Label: "Audit log", Href: "/settings/audit", Perm: auth.PermSettingsAdmin},
 }
 

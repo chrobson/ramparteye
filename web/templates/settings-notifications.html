@@ -1,0 +1,51 @@
+{{define "title"}}Settings · Notifications{{end}}
+{{define "content"}}{{$d := .Data}}{{$s := $d.Settings}}{{$ro := not $d.Available}}{{template "settings-tabs" $d.Tabs}}
+{{with $d.Error}}<p role="alert" class="alert-error mb-3">{{.}}</p>{{end}}
+<div class="grid gap-3 lg:grid-cols-[1.3fr,1fr]">
+<div>
+<section class="panel" aria-label="Webhook notifications">
+<h2 class="mb-3 font-bold">Webhook <span class="font-normal {{if $d.StatusOK}}text-ok{{else}}text-muted{{end}}"><span aria-hidden="true">●</span> {{$d.Status}}</span></h2>
+<p class="mb-3 text-sm text-muted">After every scan, RampartEye posts a summary of what changed to this webhook: a JSON receiver (SIEM, automation) or a Slack-compatible incoming webhook (Slack, Mattermost, Rocket.Chat).</p>
+<form method="post" action="/settings/notifications" id="notify-form" class="grid gap-2">
+<label class="switch"><input type="checkbox" role="switch" name="enabled" value="1"{{if $s.Enabled}} checked{{end}}{{if $ro}} disabled{{end}}><span class="switch-track" aria-hidden="true"></span>Send notifications after scans</label>
+<label><span class="lbl">Webhook URL</span><input name="url" type="password" class="input" value="" autocomplete="off" placeholder="{{if $s.URLSet}}•••••••••••••••• ({{$s.Endpoint}}, stored encrypted){{else}}https://hooks.slack.com/services/…{{end}}"{{if $ro}} disabled{{end}}></label>
+{{if $s.URLSet}}<p class="text-xs text-muted">A webhook URL for {{$s.Endpoint}} is stored encrypted (AES-256-GCM); only scheme and host are shown. Leave the field empty to keep it.</p>
+<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="clear_url" value="1"{{if $ro}} disabled{{end}}> Remove the stored webhook URL</label>{{end}}
+<label><span class="lbl">Format</span><select name="format" class="input max-w-[16rem]"{{if $ro}} disabled{{end}}><option value="json"{{if eq $s.Format "json"}} selected{{end}}>JSON (generic receiver)</option><option value="slack"{{if eq $s.Format "slack"}} selected{{end}}>Slack-compatible</option></select></label>
+<label><span class="lbl">Signing secret (optional)</span><input name="secret" type="password" class="input" value="" autocomplete="new-password" placeholder="{{if $s.SecretSet}}•••••••••••••••• (stored encrypted){{else}}not set: requests are not signed{{end}}"{{if $ro}} disabled{{end}}></label>
+{{if $s.SecretSet}}<p class="text-xs text-muted">Requests carry <code>X-Rampart-Signature: sha256=…</code>, an HMAC of the body with this secret. Leave the field empty to keep it.</p>
+<label class="flex items-center gap-2 text-sm"><input type="checkbox" name="clear_secret" value="1"{{if $ro}} disabled{{end}}> Remove the stored signing secret</label>{{end}}
+<label class="switch"><input type="checkbox" role="switch" name="only_changes" value="1"{{if $s.OnlyChanges}} checked{{end}}{{if $ro}} disabled{{end}}><span class="switch-track" aria-hidden="true"></span>Only when something changed</label>
+<label class="switch"><input type="checkbox" role="switch" name="notify_failed" value="1"{{if $s.NotifyFailed}} checked{{end}}{{if $ro}} disabled{{end}}><span class="switch-track" aria-hidden="true"></span>Also notify when a scan fails</label>
+<label><span class="lbl">Public base URL of this instance (optional)</span><input name="base_url" class="input" value="{{$s.BaseURL}}" placeholder="https://rampart.example" autocomplete="off"{{if $ro}} disabled{{end}}></label>
+<p class="text-xs text-muted">Used for links to the run and its changes in messages; without it, messages carry no links.</p>
+</form>
+<div class="mt-3 flex flex-wrap gap-2">
+<button type="submit" form="notify-form" class="btn btn-primary"{{if $ro}} disabled{{end}}>Save</button>
+<form method="post" action="/settings/notifications/test"><button type="submit" class="btn"{{if $ro}} disabled{{end}}>Send test notification</button></form>
+</div>
+</section>
+</div>
+<div class="grid content-start gap-3">
+<section class="panel" aria-label="Test notification">
+{{template "panel-title" "Test notification"}}
+{{with $d.Test}}<ul class="grid gap-1"><li class="check-row {{.State}}"><span aria-hidden="true">{{if eq .State "ok"}}✓{{else}}✗{{end}}</span> {{template "cell" (dict "Value" .Text "Max" 200)}}</li></ul>
+{{else}}<p class="text-muted">Sends a message marked as a test, with the summary of the latest finished scan, using the stored settings (also while notifications are off). The webhook URL is never shown.</p>{{end}}
+</section>
+<section class="panel" aria-label="Delivery history">
+{{template "panel-title" "Delivery history"}}
+{{if $d.History}}<div class="overflow-x-auto"><table class="tbl">
+<thead><tr><th>Run</th><th>When</th><th>Trigger</th><th>Event</th><th>Result</th></tr></thead>
+<tbody>{{range $d.History}}<tr class="push-{{.State}}">
+<td class="font-mono">{{.Run}}</td>
+<td class="whitespace-nowrap text-dim" title="{{.At.Format "2006-01-02 15:04:05 MST"}}">{{ago .At}}</td>
+<td class="text-muted">{{.Trigger}}</td>
+<td class="whitespace-nowrap font-mono text-muted">{{.Event}}</td>
+<td class="{{if eq .State "ok"}}text-ok{{else}}text-bad{{end}}">{{template "cell" (dict "Value" .Result "Max" 80)}}{{if gt .Attempts 1}} <span class="text-dim">· {{.Attempts}} attempts</span>{{end}}</td>
+</tr>{{end}}</tbody></table></div>
+{{else}}<p class="text-muted">No notifications sent yet.</p>{{end}}
+<p class="mt-2 text-xs text-muted">Up to three attempts per notification; only network errors, HTTP 429 and 5xx are retried. Redirects are never followed.</p>
+</section>
+</div>
+</div>
+{{end}}

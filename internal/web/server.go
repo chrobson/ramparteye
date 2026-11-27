@@ -155,6 +155,9 @@ type Deps struct {
 	Monitor Monitor
 	// Version is the build version shown by ramparteye_build_info.
 	Version string
+	// Notifier stores the webhook settings and sends test notifications
+	// (nil = Settings → Notifications says it is not available).
+	Notifier Notifier
 }
 
 var (
@@ -327,6 +330,9 @@ func (s *Server) Handler() http.Handler {
 		adm.Post("/settings/integrations", s.dojoSave)
 		adm.Post("/settings/integrations/test", s.dojoTest)
 		adm.Post("/settings/integrations/push", s.dojoPush)
+		adm.Get("/settings/notifications", s.notifyPage)
+		adm.Post("/settings/notifications", s.notifySave)
+		adm.Post("/settings/notifications/test", s.notifyTest)
 		adm.Get("/settings/audit", s.auditPage)
 		ua := r.With(s.require(auth.PermUsersAdmin))
 		ua.Get("/settings/users", s.usersPage)
