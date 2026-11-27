@@ -18,6 +18,10 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: make css-check
+      # Pinned so a new govulncheck release cannot break CI by itself; the Go
+      # toolchain comes from the toolchain line in go.mod (standard library
+      # advisories are fixed by patch releases).
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
       - run: shellcheck install.sh scripts/*.sh lab/*.sh tools/*.sh
 
   integration:
