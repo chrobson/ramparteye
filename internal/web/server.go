@@ -147,6 +147,11 @@ type Deps struct {
 	// signature set. A nuclei import does not call it: imported signatures
 	// are disabled until enabled one by one.
 	SignaturesChanged func()
+	// Monitor answers /healthz (nil = it reports 503) and /metrics (needed
+	// when Cfg.MetricsToken is set).
+	Monitor Monitor
+	// Version is the build version shown by ramparteye_build_info.
+	Version string
 }
 
 var (
@@ -154,6 +159,7 @@ var (
 	_ Runner      = (*runner.Runner)(nil)
 	_ Pusher      = (*dojo.Pusher)(nil)
 	_ DojoChecker = (*dojo.Client)(nil)
+	_ Monitor     = (*store.Store)(nil)
 )
 
 // InstanceHeader marks every response with the installation's id, so the
@@ -187,6 +193,11 @@ type Server struct {
 	instance string
 	// lookupTimeout bounds one DNS lookup of a domain target on import.
 	lookupTimeout time.Duration
+	// monitor, healthTimeout and metrics serve /healthz and /metrics
+	// (metrics is nil while RAMPART_METRICS_TOKEN is unset).
+	monitor       Monitor
+	healthTimeout time.Duration
+	metrics       *metricsCollector
 }
 
 // NewServer parses the embedded templates and returns the server.
@@ -206,6 +217,9 @@ func newServerFS(d Deps, tmpl, static fs.FS, now func() time.Time) (*Server, err
 		lookupTimeout: lookupTimeout}
 	if s.log == nil {
 		s.log = slog.Default()
+	}
+	if err := s.initMonitoring(); err != nil {
+		return nil, err
 	}
 	s.auth = auth.NewAuthenticator(d.Store, d.Store, now)
 	hashes, err := assetHashes(static)
@@ -227,6 +241,8 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(s.recoverer, securityHeaders, s.instanceHeader, auth.CSRF)
 	r.Handle(auth.StaticPrefix+"*", http.StripPrefix(auth.StaticPrefix, s.staticHandler()))
+
+	s.monitoringRoutes(r)
 
 	session := auth.Middleware(s.d.Store, s.now)
 	r.NotFound(session(http.HandlerFunc(s.notFound)).ServeHTTP)
